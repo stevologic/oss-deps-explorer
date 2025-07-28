@@ -5,6 +5,10 @@ on:
     branches: [ main ]
   pull_request:
 
+permissions:
+  contents: read
+  packages: write
+
 env:
   IMAGE_NAME: oss-deps-explorer
   REGISTRY: ${{ secrets.REGISTRY }}
