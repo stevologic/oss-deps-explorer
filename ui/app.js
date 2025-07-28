@@ -43,7 +43,6 @@ function App() {
     setAlerts((prev) => [...prev, msg]);
   }, []);
   const [bellBounce, setBellBounce] = React.useState(false);
-  const [showAlert, setShowAlert] = React.useState(false);
   const [search, setSearch] = React.useState("");
   const [expanded, setExpanded] = React.useState({});
   const [collapsed, setCollapsed] = React.useState({});
@@ -346,7 +345,6 @@ function App() {
       let msg =
         e.message || (e.reason && e.reason.message) || String(e.reason || e);
       addAlert(msg);
-      setShowAlert(true);
     };
     window.addEventListener("error", errHandler);
     window.addEventListener("unhandledrejection", errHandler);
@@ -362,7 +360,6 @@ function App() {
       origError.apply(console, args);
       const msg = args.map((a) => (a && a.message) || a).join(" ");
       addAlert(String(msg));
-      setShowAlert(true);
     };
     return () => {
       console.error = origError;
@@ -401,13 +398,6 @@ function App() {
     }
   }, [alerts]);
 
-  React.useEffect(() => {
-    if (alerts.length > 0) {
-      setShowAlert(true);
-      const t = setTimeout(() => setShowAlert(false), 3000);
-      return () => clearTimeout(t);
-    }
-  }, [alerts]);
 
   React.useEffect(() => {
     if (loading && statusMessages.length > 1) {
@@ -688,7 +678,6 @@ function App() {
 
     setCacheStatus("");
 
-    setShowAlert(false);
 
     let ver = forcedVer !== null ? forcedVer : version;
     if (!ver) {
@@ -703,7 +692,7 @@ function App() {
     const controller = new AbortController();
     const timer = setTimeout(() => {
       addAlert("Request timed out. Some dependencies may be missing.");
-      setShowAlert(true);
+ 
       controller.abort();
     }, 60000);
     abortRef.current = { controller, timer };
@@ -1462,12 +1451,6 @@ function App() {
   return e(
     "div",
     null,
-    showAlert &&
-      e(
-        "div",
-        { className: "alert-toast" },
-        alerts.map((msg, i) => e("div", { key: i }, msg))
-      ),
     loading &&
       e(
         "div",
@@ -1546,11 +1529,9 @@ function App() {
               "span",
               {
                 className: "alert-icon-container",
-                onMouseEnter: () => alerts.length && setShowAlert(true),
-                onMouseLeave: () => alerts.length && setShowAlert(false),
+
                 onClick: () => {
                   if (alerts.length) setAlerts([]);
-                  setShowAlert(false);
                 },
               },
               e("img", {
@@ -1560,7 +1541,6 @@ function App() {
               alerts.length > 0 &&
                 e("span", { className: "notification-badge" }),
               alerts.length > 0 &&
-                showAlert &&
                 e(
                   "div",
                   { className: "alert-box" },
