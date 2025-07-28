@@ -1,0 +1,6 @@
+image:
+  repository: oss-deps-explorer
+  tag: latest
+service:
+  type: ClusterIP
+  port: 8080

@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oss-deps-explorer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oss-deps-explorer
+  template:
+    metadata:
+      labels:
+        app: oss-deps-explorer
+    spec:
+      containers:
+        - name: oss-deps-explorer
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          args: ["-config", "/etc/oss-deps-explorer/config.yaml"]
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: config
+              mountPath: /etc/oss-deps-explorer
+      volumes:
+        - name: config
+          configMap:
+            name: oss-deps-explorer-config

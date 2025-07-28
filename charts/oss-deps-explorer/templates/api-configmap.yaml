@@ -1,0 +1,16 @@
+{{- if .Values.api.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "oss-deps-explorer.fullname" . }}-config
+data:
+  config.yaml: |-
+    server:
+      port: "8080"
+    redis:
+      addr: "redis:6379"
+      password: ""
+      db: 0
+    cache:
+      ttl: 24h
+{{- end }}

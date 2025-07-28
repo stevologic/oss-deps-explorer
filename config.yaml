@@ -1,0 +1,19 @@
+server:
+  port: "8080"
+redis:
+  addr: "redis:6379"
+  password: ""
+  db: 0
+cache:
+  ttl: 24h
+proxy:
+  url: ""
+package_manager:
+  npm: "https://api.deps.dev"
+  pypi: "https://api.deps.dev"
+  go: "https://api.deps.dev"
+  maven: "https://api.deps.dev"
+  cargo: "https://api.deps.dev"
+  rubygems: "https://api.deps.dev"
+  nuget: "https://api.deps.dev"
+  composer: "https://api.deps.dev"

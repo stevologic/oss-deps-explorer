@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oss-deps-explorer-config
+data:
+  config.yaml: |
+    server:
+      port: "8080"
+    redis:
+      addr: "redis:6379"
+      password: ""
+      db: 0
+    cache:
+      ttl: 24h

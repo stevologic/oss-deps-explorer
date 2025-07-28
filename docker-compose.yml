@@ -1,0 +1,15 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redis
+  ui:
+    build:
+      context: ./ui
+    ports:
+      - "8081:80"
+  redis:
+    image: redis:7-alpine
+    command: redis-server --save "" --appendonly no

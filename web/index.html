@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OSS Dependency Explorer</title>
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700&display=swap"
+    />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&display=swap"
+    />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/icon?family=Material+Icons"
+    />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="tsparticles"></div>
+    <div id="root"></div>
+
+    <script type="text/javascript">
+      const quoteList = [
+        "Open source is not just a license — it's a philosophy of trust, collaboration, and shared destiny.",
+        "In a world of black boxes, open source is a flashlight.",
+        "The best ideas aren’t always born behind walls — sometimes, they’re built in the open, with a pull request.",
+        "Open source is where code meets community, and community makes code stronger.",
+        "Freedom in software isn't about cost; it's about control, contribution, and conscience.",
+        "Every open source project is a monument to what humans can do when they share instead of compete.",
+        "Open source doesn’t mean insecure. It means inspected, improved, and battle-tested by many.",
+        "Security through obscurity is a myth — sunlight is the best disinfectant.",
+        "In open source, every user is a potential defender.",
+        "It takes a village to secure a system — and open source invites the whole village.",
+        "Security isn’t a product; it’s a process. Open source makes that process visible.",
+        "The more eyes on the code, the fewer places bugs and backdoors can hide.",
+        "Transparency doesn’t eliminate risk, but it makes risk manageable and trust measurable.",
+        "Open source security isn’t about perfection — it’s about progress through participation.",
+        "The strongest security models are the ones that survive public scrutiny.",
+        "In a connected world, security is a shared responsibility — open source makes that possible.",
+        "No single company can outmatch the global open source community when it comes to fixing what matters.",
+        "Security is everyone's job — open source just makes it easier to join the team.",
+        "The future of security will be built on open trust, not closed doors.",
+        "Open source is proof that when we build together, we defend better.",
+      ];
+
+      document.addEventListener('DOMContentLoaded', () => {
+        const root = document.getElementById('root');
+        if (root && root.children.length === 0) {
+          const div = document.createElement('div');
+          div.id = 'quote-overlay';
+          document.body.appendChild(div);
+
+          let shuffled = quoteList.sort(() => Math.random() - 0.5);
+          let idx = 0;
+          const showQuote = () => {
+            div.textContent = `"${shuffled[idx]}"`;
+            // trigger fade in
+            requestAnimationFrame(() => (div.style.opacity = '1'));
+            // start fade out after 6s so the 4s fade completes by 10s
+            setTimeout(() => {
+              div.style.opacity = '0';
+            }, 6000);
+            // schedule next quote
+            idx += 1;
+            if (idx >= shuffled.length) {
+              shuffled = quoteList.sort(() => Math.random() - 0.5);
+              idx = 0;
+            }
+            setTimeout(showQuote, 10000);
+          };
+          showQuote();
+
+          const obs = new MutationObserver(() => {
+            if (root.children.length > 0) {
+              document.body.classList.add('show-scroll');
+              div.remove();
+              obs.disconnect();
+            }
+          });
+          obs.observe(root, { childList: true });
+        } else if (root) {
+          document.body.classList.add('show-scroll');
+        }
+      });
+    </script>
+
+    <script
+      crossorigin
+      src="https://unpkg.com/react@18/umd/react.development.js"
+    ></script>
+    <script
+      crossorigin
+      src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"
+    ></script>
+    <script src="https://unpkg.com/@mui/material@5/umd/material-ui.development.js"></script>
+    <script src="https://unpkg.com/@emotion/react@11/umd/emotion-react.umd.min.js"></script>
+    <script src="https://unpkg.com/@emotion/styled@11/umd/emotion-styled.umd.min.js"></script>
+    <script src="theme.js"></script>
+    <script src="https://unpkg.com/tsparticles@3.8.1/tsparticles.bundle.min.js"></script>
+    <script src="https://unpkg.com/tsparticles-preset-stars@2/tsparticles.preset.stars.bundle.min.js"></script>
+    <script type="text/javascript">
+      const { AppBar, Toolbar, Typography, Container, Button, CssBaseline } =
+        MaterialUI;
+      const { ThemeProvider } = MaterialUI;
+      const theme = sentinelTheme;
+
+      function App() {
+        return React.createElement(
+          ThemeProvider,
+          { theme },
+          React.createElement(
+            React.Fragment,
+            null,
+            React.createElement(CssBaseline, null),
+            React.createElement(
+              AppBar,
+              { position: "fixed", sx: { width: "100%", left: 0 } },
+              React.createElement(
+                Toolbar,
+                null,
+                React.createElement(
+                  Typography,
+                  {
+                    variant: "h6",
+                    component: "div",
+                    sx: {
+                      flexGrow: 1,
+                      display: "flex",
+                      alignItems: "center",
+                      color: "#fff",
+                      fontFamily: "Roboto, monospace",
+                    },
+                  },
+                  React.createElement(
+                    "span",
+                    { className: "material-icons", style: { marginRight: 8 } },
+                    "public",
+                  ),
+                  React.createElement(
+                    "a",
+                    {
+                      href: "#",
+                      onClick: () => window.location.reload(),
+                      style: { color: "#fff", textDecoration: "none" },
+                    },
+                    "OSS Dependency Explorer",
+                  ),
+                ),
+                React.createElement(Button, { color: "inherit" }, "Login"),
+              ),
+            ),
+            React.createElement(
+              Container,
+              { sx: { mt: 8 } },
+              React.createElement(
+                Typography,
+                { variant: "h4", gutterBottom: true },
+                "Welcome to SentinelAI",
+              ),
+              React.createElement(
+                Typography,
+                { variant: "body1" },
+                "This dashboard analyzes third-party dependencies with a security-focused AI theme.",
+              ),
+            ),
+          ),
+        );
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById("root"));
+      root.render(React.createElement(App));
+
+      tsParticles.load("tsparticles", {
+        preset: "stars",
+        background: { color: "#0d1117" },
+        particles: {
+          color: { value: "#161b22" },
+          links: { color: "#161b22" },
+          number: { value: 60 },
+          size: { value: 1 },
+          move: { speed: 0.3 },
+          opacity: { value: 0.8 },
+        },
+        interactivity: {
+          events: { onHover: { enable: true, mode: "repulse" } },
+          modes: { repulse: { distance: 75 } },
+        },
+      });
+    </script>
+    <script type="text/javascript">
+      document.addEventListener('DOMContentLoaded', () => {
+        const toggleDisplay = (div) => {
+          const hasContent = div.children.length > 0 || div.textContent.trim() !== '';
+          div.style.display = hasContent ? '' : 'none';
+        };
+        const observerConfig = { childList: true, characterData: true, subtree: true };
+        const observeDiv = (div) => {
+          if (div.closest('header, footer, form')) return;
+          toggleDisplay(div);
+          new MutationObserver(() => toggleDisplay(div)).observe(div, observerConfig);
+        };
+
+        document.querySelectorAll('div').forEach(observeDiv);
+
+        new MutationObserver((mutations) => {
+          mutations.forEach((m) => {
+            m.addedNodes.forEach((node) => {
+              if (node.nodeType === 1 && node.tagName === 'DIV') {
+                observeDiv(node);
+              }
+            });
+          });
+        }).observe(document.body, { childList: true, subtree: true });
+      });
+    </script>
+  </body>
+</html>

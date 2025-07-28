@@ -1,0 +1,149 @@
+<!doctype html>
+
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OSS Dependency Explorer</title>
+    <script src="vendor/react.production.min.js"></script>
+    <script src="vendor/react-dom.production.min.js"></script>
+    <!-- Load d3 from CDN to ensure availability -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Roboto:300,400,500,700&display=swap"
+    />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&display=swap"
+    />
+    <link rel="stylesheet" href="theme.css" />
+  </head>
+  <body>
+    <div id="tsparticles"></div>
+    <div id="app"></div>
+    <script type="text/javascript">
+      const quoteList = [
+        "Open source is not just a license — it's a philosophy of trust, collaboration, and shared destiny.",
+        "In a world of black boxes, open source is a flashlight.",
+        "The best ideas aren’t always born behind walls — sometimes, they’re built in the open, with a pull request.",
+        "Open source is where code meets community, and community makes code stronger.",
+        "Freedom in software isn't about cost; it's about control, contribution, and conscience.",
+        "Every open source project is a monument to what humans can do when they share instead of compete.",
+        "Open source doesn’t mean insecure. It means inspected, improved, and battle-tested by many.",
+        "Security through obscurity is a myth — sunlight is the best disinfectant.",
+        "In open source, every user is a potential defender.",
+        "It takes a village to secure a system — and open source invites the whole village.",
+        "Security isn’t a product; it’s a process. Open source makes that process visible.",
+        "The more eyes on the code, the fewer places bugs and backdoors can hide.",
+        "Transparency doesn’t eliminate risk, but it makes risk manageable and trust measurable.",
+        "Open source security isn’t about perfection — it’s about progress through participation.",
+        "The strongest security models are the ones that survive public scrutiny.",
+        "In a connected world, security is a shared responsibility — open source makes that possible.",
+        "No single company can outmatch the global open source community when it comes to fixing what matters.",
+        "Security is everyone's job — open source just makes it easier to join the team.",
+        "The future of security will be built on open trust, not closed doors.",
+        "Open source is proof that when we build together, we defend better.",
+      ];
+
+      document.addEventListener('DOMContentLoaded', () => {
+        history.scrollRestoration = 'manual';
+        window.scrollTo(0, 0);
+        const app = document.getElementById('app');
+        const div = document.createElement('div');
+        div.id = 'quote-overlay';
+        document.body.appendChild(div);
+
+        let shuffled = quoteList.sort(() => Math.random() - 0.5);
+        let idx = 0;
+        const showQuote = () => {
+          div.textContent = `"${shuffled[idx]}"`;
+          requestAnimationFrame(() => (div.style.opacity = '1'));
+          // start fade out after 6s so the 4s fade completes by 10s
+          setTimeout(() => {
+            div.style.opacity = '0';
+          }, 6000);
+          idx += 1;
+          if (idx >= shuffled.length) {
+            shuffled = quoteList.sort(() => Math.random() - 0.5);
+            idx = 0;
+          }
+          setTimeout(showQuote, 10000);
+        };
+        showQuote();
+
+      });
+    </script>
+    <script src="app.js"></script>
+    <script src="https://unpkg.com/tsparticles@3.8.1/tsparticles.bundle.min.js"></script>
+    <script src="https://unpkg.com/tsparticles-preset-links@2/tsparticles.preset.links.bundle.min.js"></script>
+    <script type="text/javascript">
+      tsParticles.load("tsparticles", {
+        preset: "links",
+        background: {
+          color: "transparent",
+        },
+        particles: {
+          color: {
+            value:
+              getComputedStyle(document.documentElement).getPropertyValue(
+                "--header-bg",
+              ) || "#161b22",
+          },
+          links: {
+            color:
+              getComputedStyle(document.documentElement).getPropertyValue(
+                "--header-bg",
+              ) || "#161b22",
+          },
+          number: { value: 60 },
+          size: { value: 1 },
+          move: { speed: 0.3 },
+          opacity: { value: 0.8 },
+        },
+        interactivity: {
+          events: { onHover: { enable: true, mode: "repulse" } },
+          modes: { repulse: { distance: 75 } },
+        },
+      });
+    </script>
+    <script type="text/javascript">
+      document.addEventListener('DOMContentLoaded', () => {
+        const toggleDisplay = (div) => {
+          const hasContent = div.children.length > 0 || div.textContent.trim() !== '';
+          div.style.display = hasContent ? '' : 'none';
+        };
+        const observerConfig = { childList: true, characterData: true, subtree: true };
+        const observeDiv = (div) => {
+          if (div.closest('header, footer, form')) return;
+          toggleDisplay(div);
+          new MutationObserver(() => toggleDisplay(div)).observe(div, observerConfig);
+        };
+
+        document.querySelectorAll('div').forEach(observeDiv);
+
+        new MutationObserver((mutations) => {
+          mutations.forEach((m) => {
+            m.addedNodes.forEach((node) => {
+              if (node.nodeType === 1 && node.tagName === 'DIV') {
+                observeDiv(node);
+              }
+            });
+          });
+        }).observe(document.body, { childList: true, subtree: true });
+      });
+    </script>
+
+    <footer class="page-footer">
+      <a
+        href="https://github.com/stevologic"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="footer-parrot-link"
+      >
+        <img src="icons/parrot.svg" alt="Parrot" class="footer-parrot" />
+      </a>
+    </footer>
+  </body>
+</html>

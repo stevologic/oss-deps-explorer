@@ -1,0 +1,14 @@
+{{- if .Values.ui.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "oss-deps-explorer.fullname" . }}-ui
+spec:
+  type: {{ .Values.ui.service.type }}
+  ports:
+    - port: {{ .Values.ui.service.port }}
+      targetPort: 80
+      name: http
+  selector:
+    app: {{ include "oss-deps-explorer.fullname" . }}-ui
+{{- end }}

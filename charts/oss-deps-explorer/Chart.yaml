@@ -1,0 +1,6 @@
+apiVersion: v2
+name: oss-deps-explorer
+description: Helm chart for oss-deps-explorer API and UI
+version: 0.1.0
+appVersion: "1.0"
+type: application

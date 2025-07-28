@@ -1,0 +1,16 @@
+api:
+  enabled: true
+  image:
+    repository: oss-deps-explorer
+    tag: latest
+  service:
+    type: ClusterIP
+    port: 8080
+ui:
+  enabled: true
+  image:
+    repository: oss-deps-explorer-ui
+    tag: latest
+  service:
+    type: ClusterIP
+    port: 80

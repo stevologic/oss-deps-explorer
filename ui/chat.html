@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Deps Chat</title>
+    <link rel="stylesheet" href="chat.css" />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Roboto:300,400,500,700&display=swap"
+    />
+    <link rel="stylesheet" href="theme.css" />
+  </head>
+  <body>
+    <div id="tsparticles"></div>
+    <div id="chat-container"></div>
+    <form id="input-form" autocomplete="off">
+      <div class="chat-input-container">
+        <input
+          id="chat-input"
+          type="text"
+          placeholder="e.g. npm express 4.18.2"
+          autocomplete="off"
+        />
+        <button type="button" id="chat-clear" class="clear-btn">&times;</button>
+      </div>
+      <button type="submit">Send</button>
+    </form>
+    <script src="chat.js"></script>
+    <script src="https://unpkg.com/tsparticles@3.8.1/tsparticles.bundle.min.js"></script>
+    <script src="https://unpkg.com/tsparticles-preset-links@2/tsparticles.preset.links.bundle.min.js"></script>
+    <script type="text/javascript">
+      tsParticles.load("tsparticles", {
+        preset: "links",
+        background: { color: "#343541" },
+        particles: {
+          color: { value: "#161b22" },
+          links: { color: "#161b22" },
+          number: { value: 60 },
+          size: { value: 1 },
+          move: { speed: 0.3 },
+          opacity: { value: 0.8 },
+        },
+        interactivity: {
+          events: { onHover: { enable: true, mode: "repulse" } },
+          modes: { repulse: { distance: 75 } },
+        },
+      });
+    </script>
+    <script type="text/javascript">
+      document.addEventListener('DOMContentLoaded', () => {
+        const toggleDisplay = (div) => {
+          const hasContent = div.children.length > 0 || div.textContent.trim() !== '';
+          div.style.display = hasContent ? '' : 'none';
+        };
+        const observerConfig = { childList: true, characterData: true, subtree: true };
+        const observeDiv = (div) => {
+          if (div.closest('header, footer, form')) return;
+          toggleDisplay(div);
+          new MutationObserver(() => toggleDisplay(div)).observe(div, observerConfig);
+        };
+
+        document.querySelectorAll('div').forEach(observeDiv);
+
+        new MutationObserver((mutations) => {
+          mutations.forEach((m) => {
+            m.addedNodes.forEach((node) => {
+              if (node.nodeType === 1 && node.tagName === 'DIV') {
+                observeDiv(node);
+              }
+            });
+          });
+        }).observe(document.body, { childList: true, subtree: true });
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,32 @@
+{{- if .Values.api.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "oss-deps-explorer.fullname" . }}-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ include "oss-deps-explorer.fullname" . }}-api
+  template:
+    metadata:
+      labels:
+        app: {{ include "oss-deps-explorer.fullname" . }}-api
+    spec:
+      containers:
+        - name: api
+          image: "{{ .Values.api.image.repository }}:{{ .Values.api.image.tag }}"
+          args:
+            - "-config"
+            - "/app/config.yaml"
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: config
+              mountPath: /app/config.yaml
+              subPath: config.yaml
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "oss-deps-explorer.fullname" . }}-config
+{{- end }}

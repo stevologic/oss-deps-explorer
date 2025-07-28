@@ -1,0 +1,21 @@
+{{- if .Values.ui.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "oss-deps-explorer.fullname" . }}-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ include "oss-deps-explorer.fullname" . }}-ui
+  template:
+    metadata:
+      labels:
+        app: {{ include "oss-deps-explorer.fullname" . }}-ui
+    spec:
+      containers:
+        - name: ui
+          image: "{{ .Values.ui.image.repository }}:{{ .Values.ui.image.tag }}"
+          ports:
+            - containerPort: 80
+{{- end }}
