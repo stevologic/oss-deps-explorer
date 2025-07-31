@@ -699,12 +699,12 @@ func main() {
 	r := mux.NewRouter()
 	r.Use(logRequests)
 
-	r.HandleFunc("/config", func(w http.ResponseWriter, req *http.Request) {
+	r.HandleFunc("/api/config", func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(cfg.PackageManager)
 	}).Methods(http.MethodGet)
 
-	r.HandleFunc("/suggest/{manager}/{query}", func(w http.ResponseWriter, req *http.Request) {
+	r.HandleFunc("/api/suggest/{manager}/{query}", func(w http.ResponseWriter, req *http.Request) {
 		vars := mux.Vars(req)
 		pm := vars["manager"]
 		q := vars["query"]
@@ -744,7 +744,7 @@ func main() {
 		w.Write(data)
 	}).Methods(http.MethodGet)
 
-	r.HandleFunc("/repo/{repo:.*}", func(w http.ResponseWriter, req *http.Request) {
+	r.HandleFunc("/api/repo/{repo:.*}", func(w http.ResponseWriter, req *http.Request) {
 		vars := mux.Vars(req)
 		repo := strings.TrimPrefix(vars["repo"], "github.com/")
 		ctx := req.Context()
@@ -758,7 +758,7 @@ func main() {
 	}).Methods(http.MethodGet)
 
 	// generic lookup endpoint using query parameters
-	r.HandleFunc("/lookup", func(w http.ResponseWriter, req *http.Request) {
+	r.HandleFunc("/api/lookup", func(w http.ResponseWriter, req *http.Request) {
 		q := req.URL.Query()
 		pm := q.Get("manager")
 		ns := q.Get("namespace")
@@ -830,7 +830,7 @@ func main() {
 	}).Methods(http.MethodGet)
 
 	// special route for Go modules which may contain slashes in the module path
-	r.HandleFunc("/dependencies/go/{module:.+}/{version}", func(w http.ResponseWriter, req *http.Request) {
+	r.HandleFunc("/api/dependencies/go/{module:.+}/{version}", func(w http.ResponseWriter, req *http.Request) {
 		vars := mux.Vars(req)
 		module := vars["module"]
 		version := vars["version"]
@@ -905,7 +905,7 @@ func main() {
 	}).Methods(http.MethodGet)
 
 	// lookup via package URL
-	r.HandleFunc("/purl/{purl}", func(w http.ResponseWriter, req *http.Request) {
+	r.HandleFunc("/api/purl/{purl}", func(w http.ResponseWriter, req *http.Request) {
 		vars := mux.Vars(req)
 		pstr := vars["purl"]
 		pu, err := purl.FromString(pstr)
@@ -989,7 +989,7 @@ func main() {
 	}).Methods(http.MethodGet)
 
 	// route with namespace
-	r.HandleFunc("/dependencies/{manager}/{namespace}/{name}/{version}", func(w http.ResponseWriter, req *http.Request) {
+	r.HandleFunc("/api/dependencies/{manager}/{namespace}/{name}/{version}", func(w http.ResponseWriter, req *http.Request) {
 		vars := mux.Vars(req)
 		pm := vars["manager"]
 		ns := vars["namespace"]
@@ -1062,7 +1062,7 @@ func main() {
 	}).Methods(http.MethodGet)
 
 	// route without namespace
-	r.HandleFunc("/dependencies/{manager}/{name}/{version}", func(w http.ResponseWriter, req *http.Request) {
+	r.HandleFunc("/api/dependencies/{manager}/{name}/{version}", func(w http.ResponseWriter, req *http.Request) {
 		vars := mux.Vars(req)
 		pm := vars["manager"]
 		name := vars["name"]

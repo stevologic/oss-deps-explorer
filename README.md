@@ -21,9 +21,9 @@ Optional features include:
 * Repository URLs cached alongside dependency data for faster Scorecard lookups.
 * GraphViz visual output when `-graph` is supplied (for `/purl` requests).
 
-Dependencies can also be fetched using a [package URL](https://github.com/package-url/purl-spec) via the `/purl/{purl}` endpoint.
+Dependencies can also be fetched using a [package URL](https://github.com/package-url/purl-spec) via the `/api/purl/{purl}` endpoint.
 
-Deps.dev API base URLs are exposed via `/config` and package name suggestions (currently npm only) can be requested from `/suggest/{manager}/{query}`.
+Deps.dev API base URLs are exposed via `/api/config` and package name suggestions (currently npm only) can be requested from `/api/suggest/{manager}/{query}`.
 ### Supported package managers
 
 | Manager | Path component mapping | Notes |
@@ -163,29 +163,29 @@ The binary accepts the following flags:
 ## API Usage
 ```
 
-GET /dependencies/{manager}/{namespace}/{name}/{version}
-GET /dependencies/{manager}/{name}/{version}
-GET /purl/{purl}
-GET /config
-GET /suggest/{manager}/{query}
-GET /repo/{repo}
+GET /api/dependencies/{manager}/{namespace}/{name}/{version}
+GET /api/dependencies/{manager}/{name}/{version}
+GET /api/purl/{purl}
+GET /api/config
+GET /api/suggest/{manager}/{query}
+GET /api/repo/{repo}
 
-GET /lookup?manager=<manager>&name=<name>&version=<version>[&namespace=<ns>][&recursive=true][&vuln=true][&scorecard=true]
+GET /api/lookup?manager=<manager>&name=<name>&version=<version>[&namespace=<ns>][&recursive=true][&vuln=true][&scorecard=true]
 
 ```
 
 Example for npm (no namespace):
 
 ```
-curl http://localhost:8080/dependencies/npm/express/4.18.2
-curl http://localhost:8080/purl/pkg:npm/express@4.18.2
+curl http://localhost:8080/api/dependencies/npm/express/4.18.2
+curl http://localhost:8080/api/purl/pkg:npm/express@4.18.2
 ```
 
 Optional boolean query parameters `recursive`, `vuln`, and `scorecard` can override the
 server flags per request:
 
 ```
-curl "http://localhost:8080/dependencies/npm/express/4.18.2?recursive=true&vuln=true&scorecard=true"
+curl "http://localhost:8080/api/dependencies/npm/express/4.18.2?recursive=true&vuln=true&scorecard=true"
 ```
 
 The response JSON has the simple shape:
@@ -215,7 +215,7 @@ The `/lookup` endpoint exposes the same functionality using query parameters ins
 Example:
 
 ```bash
-curl "http://localhost:8080/lookup?manager=npm&name=express&version=4.18.2&recursive=true&vuln=true&scorecard=true"
+curl "http://localhost:8080/api/lookup?manager=npm&name=express&version=4.18.2&recursive=true&vuln=true&scorecard=true"
 ```
 
 ## Example requests
@@ -224,33 +224,33 @@ Below are sample invocations for each supported manager with shortened output:
 
 ```bash
 # npm
-curl -s http://localhost:8080/dependencies/npm/express/4.18.2 | head -c 80
+curl -s http://localhost:8080/api/dependencies/npm/express/4.18.2 | head -c 80
 {"dependencies":{"accepts":"~1.3.8",...}}
-curl -s http://localhost:8080/dependencies/npm/@babel/core/7.21.0 | head -c 80
+curl -s http://localhost:8080/api/dependencies/npm/@babel/core/7.21.0 | head -c 80
 {"dependencies":{"@ampproject/remapping":"^2.2.0",...}}
 
 # pypi
-curl -s http://localhost:8080/dependencies/pypi/requests/2.31.0 | head -c 80
+curl -s http://localhost:8080/api/dependencies/pypi/requests/2.31.0 | head -c 80
 {"dependencies":{"PySocks (!=1.5.7,>=1.5.6) ; extra == 'socks',...}}
-curl -s http://localhost:8080/dependencies/pypi/urllib3/2.2.0 | head -c 80
+curl -s http://localhost:8080/api/dependencies/pypi/urllib3/2.2.0 | head -c 80
 {"dependencies":{"brotli>=1.0.9; (platform_python_implementation == 'CPython') and extra == 'brotli',...}}
 
 # go
-curl -s http://localhost:8080/dependencies/go/github.com/gorilla/mux/v1.8.1 | head -c 80
+curl -s http://localhost:8080/api/dependencies/go/github.com/gorilla/mux/v1.8.1 | head -c 80
 {"dependencies":{}}
-curl -s http://localhost:8080/dependencies/go/github.com/stretchr/testify/v1.8.2 | head -c 80
+curl -s http://localhost:8080/api/dependencies/go/github.com/stretchr/testify/v1.8.2 | head -c 80
 {"dependencies":{"github.com/davecgh/go-spew":"v1.1.1",...}}
 
 # maven
-curl -s http://localhost:8080/dependencies/maven/org.apache.commons/commons-lang3/3.12.0 | head -c 80
+curl -s http://localhost:8080/api/dependencies/maven/org.apache.commons/commons-lang3/3.12.0 | head -c 80
 {"dependencies":{"com.google.code.findbugs:jsr305":"3.0.2",...}}
-curl -s http://localhost:8080/dependencies/maven/junit/junit/4.13.2 | head -c 80
+curl -s http://localhost:8080/api/dependencies/maven/junit/junit/4.13.2 | head -c 80
 {"dependencies":{"org.hamcrest:hamcrest-core":"${hamcrestVersion}",...}}
 
 # cargo
-curl -s http://localhost:8080/dependencies/cargo/rand/0.8.5 | head -c 80
+curl -s http://localhost:8080/api/dependencies/cargo/rand/0.8.5 | head -c 80
 {"dependencies":{"bincode":"^1.2.1",...}}
-curl -s http://localhost:8080/dependencies/cargo/serde/1.0.200 | head -c 80
+curl -s http://localhost:8080/api/dependencies/cargo/serde/1.0.200 | head -c 80
 {"dependencies":{"serde_derive":"^1"}}
 ```
 
@@ -259,7 +259,7 @@ curl -s http://localhost:8080/dependencies/cargo/serde/1.0.200 | head -c 80
 The following shows the complete JSON returned for one of the above requests:
 
 ```bash
-curl -s http://localhost:8080/dependencies/npm/express/4.18.2 | jq
+curl -s http://localhost:8080/api/dependencies/npm/express/4.18.2 | jq
 {
   "dependencies": {
     "qs": "6.11.0",
@@ -317,11 +317,11 @@ Example requests with the expanded output:
 
 ```bash
 # npm
-curl -s http://localhost:8080/dependencies/npm/express/4.18.2 | head -c 80
+curl -s http://localhost:8080/api/dependencies/npm/express/4.18.2 | head -c 80
 # maven
-curl -s http://localhost:8080/dependencies/maven/org.apache.commons/commons-lang3/3.12.0 | head -c 80
+curl -s http://localhost:8080/api/dependencies/maven/org.apache.commons/commons-lang3/3.12.0 | head -c 80
 # go
-curl -s http://localhost:8080/dependencies/go/github.com/stretchr/testify/v1.8.2 | head -c 80
+curl -s http://localhost:8080/api/dependencies/go/github.com/stretchr/testify/v1.8.2 | head -c 80
 ```
 
 Any dependencies that fail to resolve will appear in an `errors` array in the JSON response.

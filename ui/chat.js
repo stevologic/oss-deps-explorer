@@ -41,10 +41,10 @@
       url = `${apiOrigin}/purl/${purl}`;
     } else if (parts.length === 3) {
       const [mgr, name, ver] = parts;
-      url = `${apiOrigin}/dependencies/${mgr}/${name}/${ver}`;
+      url = `${apiOrigin}/api/dependencies/${mgr}/${name}/${ver}`;
     } else if (parts.length === 4) {
       const [mgr, ns, name, ver] = parts;
-      url = `${apiOrigin}/dependencies/${mgr}/${ns}/${name}/${ver}`;
+      url = `${apiOrigin}/api/dependencies/${mgr}/${ns}/${name}/${ver}`;
     } else {
       addMsg(
         "bot",
