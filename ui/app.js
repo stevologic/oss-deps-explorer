@@ -56,8 +56,8 @@ function App() {
     const defaults = {
       r: 0,
       g: 0,
-      b: 0,
-      opacity: 1,
+      b: 30,
+      opacity: 0.65,
       brightness: 100,
       elementOpacity: 1,
     };
@@ -95,7 +95,7 @@ function App() {
   });
   const [includeScorecard, setIncludeScorecard] = React.useState(() => {
     const v = localStorage.getItem("includeScorecard");
-    return v === null ? false : v === "true";
+    return v === null ? true : v === "true";
   });
   const showVersionSuggestions = !version && latestVersions.length > 0;
 
@@ -324,7 +324,7 @@ function App() {
     }
     let cancelled = false;
     const timer = setTimeout(() => {
-      fetchInternal(`${apiOrigin}/suggest/${manager}/${encodeURIComponent(name)}`)
+      fetchInternal(`${apiOrigin}/api/suggest/${manager}/${encodeURIComponent(name)}`)
         .then((resp) => (resp.ok ? resp.json() : []))
         .then((data) => {
           if (!cancelled) {
@@ -367,7 +367,7 @@ function App() {
   }, []);
 
   React.useEffect(() => {
-    fetchInternal(`${apiOrigin}/config`)
+    fetchInternal(`${apiOrigin}/api/config`)
       .then((resp) => (resp.ok ? resp.json() : {}))
       .then((data) => setPmURLs(data))
       .catch(() => {});
@@ -381,7 +381,7 @@ function App() {
     );
     const repo = repos[key];
     if (repo && !repoMeta[repo]) {
-      fetchInternal(`${apiOrigin}/repo/${repo}`)
+      fetchInternal(`${apiOrigin}/api/repo/${repo}`)
         .then((resp) => (resp.ok ? resp.json() : {}))
         .then((data) => {
           setRepoMeta((prev) => ({ ...prev, [repo]: data }));
@@ -714,7 +714,7 @@ function App() {
       setSubmittedNamespace(nsVal);
       setSubmittedManager(mgrVal);
 
-      const base = `${apiOrigin}/dependencies/${mgrVal}`;
+      const base = `${apiOrigin}/api/dependencies/${mgrVal}`;
       const path = nsVal
         ? `${base}/${nsVal}/${nameVal}/${ver}`
         : `${base}/${nameVal}/${ver}`;
