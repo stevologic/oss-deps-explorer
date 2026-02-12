@@ -323,6 +323,36 @@ func purlCacheKey(purl string, recursive, vuln, score bool) string {
 	return key
 }
 
+// aliasFromURL extracts a potential OSV ID or CVE from a reference URL.
+func aliasFromURL(u string) string {
+	if i := strings.LastIndex(u, "/"); i >= 0 && i < len(u)-1 {
+		return u[i+1:]
+	}
+	return ""
+}
+
+// fetchVulnByID retrieves a vulnerability entry from OSV by ID.
+func fetchVulnByID(ctx context.Context, id string) (map[string]interface{}, error) {
+	url := fmt.Sprintf("https://api.osv.dev/v1/vulns/%s", id)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("osv.dev returned status %d", resp.StatusCode)
+	}
+	var out map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func fetchVulns(ctx context.Context, ecosystem, name, version string, rdb *redis.Client, ttl time.Duration) ([]map[string]interface{}, error) {
 	var key string
 	if rdb != nil {
@@ -360,6 +390,50 @@ func fetchVulns(ctx context.Context, ecosystem, name, version string, rdb *redis
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, err
+	}
+	// Populate missing severity information using alias references.
+	for _, v := range out.Vulns {
+		sev, ok := v["severity"]
+		hasSev := false
+		if ok {
+			if arr, ok := sev.([]interface{}); ok && len(arr) > 0 {
+				hasSev = true
+			} else if m, ok := sev.(map[string]interface{}); ok && len(m) > 0 {
+				hasSev = true
+			}
+		}
+		if hasSev {
+			continue
+		}
+		var aliases []string
+		if a, ok := v["aliases"].([]interface{}); ok {
+			for _, idv := range a {
+				if s, ok := idv.(string); ok {
+					aliases = append(aliases, s)
+				}
+			}
+		}
+		if refs, ok := v["references"].([]interface{}); ok {
+			for _, rv := range refs {
+				if m, ok := rv.(map[string]interface{}); ok {
+					if u, ok := m["url"].(string); ok {
+						if id := aliasFromURL(u); id != "" {
+							aliases = append(aliases, id)
+						}
+					}
+				}
+			}
+		}
+		for _, id := range aliases {
+			if aliasVuln, err := fetchVulnByID(ctx, id); err == nil {
+				if sev, ok := aliasVuln["severity"]; ok {
+					if arr, ok := sev.([]interface{}); ok && len(arr) > 0 {
+						v["severity"] = sev
+						break
+					}
+				}
+			}
+		}
 	}
 	if rdb != nil {
 		if data, err := json.Marshal(out.Vulns); err == nil {
