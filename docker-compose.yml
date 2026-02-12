@@ -13,6 +13,6 @@ services:
       - "8081:80"
     restart: always
   redis:
-    image: redis:7-alpine
+    image: redis:7.4-alpine
     restart: always
     command: redis-server --save "" --appendonly no
