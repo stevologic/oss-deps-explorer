@@ -13,4 +13,15 @@ data:
       db: 0
     cache:
       ttl: 24h
+    proxy:
+      url: ""
+    package_manager:
+      npm: "https://api.deps.dev/v3"
+      pypi: "https://api.deps.dev/v3"
+      go: "https://api.deps.dev/v3"
+      maven: "https://api.deps.dev/v3"
+      cargo: "https://api.deps.dev/v3"
+      rubygems: "https://api.deps.dev/v3"
+      nuget: "https://api.deps.dev/v3"
+      composer: "https://repo.packagist.org"
 {{- end }}
