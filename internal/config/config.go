@@ -1,7 +1,7 @@
 package config
 
 import (
-	"io/ioutil"
+	"os"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -38,7 +38,7 @@ type Config struct {
 
 // Load reads the configuration from the specified path.
 func Load(path string) (*Config, error) {
-	data, err := ioutil.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -46,5 +46,39 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &c); err != nil {
 		return nil, err
 	}
+	applyDefaults(&c)
 	return &c, nil
+}
+
+func applyDefaults(c *Config) {
+	if c.Server.Port == "" {
+		c.Server.Port = "8080"
+	}
+	if c.Cache.TTL == 0 {
+		c.Cache.TTL = 24 * time.Hour
+	}
+	if c.PackageManager.NPM == "" {
+		c.PackageManager.NPM = "https://api.deps.dev/v3"
+	}
+	if c.PackageManager.PyPI == "" {
+		c.PackageManager.PyPI = "https://api.deps.dev/v3"
+	}
+	if c.PackageManager.Go == "" {
+		c.PackageManager.Go = "https://api.deps.dev/v3"
+	}
+	if c.PackageManager.Maven == "" {
+		c.PackageManager.Maven = "https://api.deps.dev/v3"
+	}
+	if c.PackageManager.Cargo == "" {
+		c.PackageManager.Cargo = "https://api.deps.dev/v3"
+	}
+	if c.PackageManager.RubyGems == "" {
+		c.PackageManager.RubyGems = "https://api.deps.dev/v3"
+	}
+	if c.PackageManager.NuGet == "" {
+		c.PackageManager.NuGet = "https://api.deps.dev/v3"
+	}
+	if c.PackageManager.Composer == "" {
+		c.PackageManager.Composer = "https://repo.packagist.org"
+	}
 }

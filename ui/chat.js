@@ -38,13 +38,13 @@
     let url = "";
     if (query.startsWith("purl ")) {
       const purl = encodeURIComponent(query.slice(5));
-      url = `${apiOrigin}/purl/${purl}`;
+      url = `${apiOrigin}/api/purl/${purl}`;
     } else if (parts.length === 3) {
       const [mgr, name, ver] = parts;
-      url = `${apiOrigin}/api/dependencies/${mgr}/${name}/${ver}`;
+      url = `${apiOrigin}/api/dependencies/${encodeURIComponent(mgr)}/${encodeURIComponent(name)}/${encodeURIComponent(ver)}`;
     } else if (parts.length === 4) {
       const [mgr, ns, name, ver] = parts;
-      url = `${apiOrigin}/api/dependencies/${mgr}/${ns}/${name}/${ver}`;
+      url = `${apiOrigin}/api/dependencies/${encodeURIComponent(mgr)}/${encodeURIComponent(ns)}/${encodeURIComponent(name)}/${encodeURIComponent(ver)}`;
     } else {
       addMsg(
         "bot",

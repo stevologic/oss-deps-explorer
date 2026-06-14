@@ -14,7 +14,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/mod/semver"
 
 	purl "github.com/package-url/packageurl-go"
 
@@ -63,6 +66,67 @@ func logRequests(next http.Handler) http.Handler {
 		next.ServeHTTP(sw, r)
 		log.Printf("%s %s -> %d (%s)", r.Method, r.URL.Path, sw.status, time.Since(start))
 	})
+}
+
+type redisCache struct {
+	client        *redis.Client
+	mu            sync.Mutex
+	disabledUntil time.Time
+}
+
+func newRedisCache(cfg *config.Config) *redisCache {
+	if cfg.Redis.Addr == "" {
+		return nil
+	}
+	return &redisCache{client: redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Addr,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})}
+}
+
+func (c *redisCache) available() bool {
+	if c == nil || c.client == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return time.Now().After(c.disabledUntil)
+}
+
+func (c *redisCache) markUnavailable(err error) {
+	if err == nil || errors.Is(err, redis.Nil) {
+		return
+	}
+	c.mu.Lock()
+	c.disabledUntil = time.Now().Add(30 * time.Second)
+	c.mu.Unlock()
+	log.Printf("redis cache unavailable, temporarily disabling cache: %v", err)
+}
+
+func (c *redisCache) get(ctx context.Context, key string) (string, bool) {
+	if !c.available() {
+		return "", false
+	}
+	ctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancel()
+	val, err := c.client.Get(ctx, key).Result()
+	if err == nil {
+		return val, true
+	}
+	c.markUnavailable(err)
+	return "", false
+}
+
+func (c *redisCache) set(ctx context.Context, key string, value interface{}, ttl time.Duration) {
+	if !c.available() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancel()
+	if err := c.client.Set(ctx, key, value, ttl).Err(); err != nil {
+		c.markUnavailable(err)
+	}
 }
 
 // writeError writes an HTTP error status based on the provided error.
@@ -115,7 +179,7 @@ var purlMap = map[string]string{
 	"composer": "composer",
 }
 
-func fetchAllDeps(ctx context.Context, m manager.Manager, ns, name, version string, recursive bool, visited map[string]struct{}, parent string, pm string, rdb *redis.Client, ttl time.Duration) (map[string]interface{}, map[string][]string, []string, error) {
+func fetchAllDeps(ctx context.Context, m manager.Manager, ns, name, version string, recursive bool, visited map[string]struct{}, parent string, pm string, cache *redisCache, ttl time.Duration) (map[string]interface{}, map[string][]string, []string, error) {
 
 	deps, repo, err := m.Dependencies(ctx, ns, name, version)
 	if err != nil {
@@ -129,11 +193,15 @@ func fetchAllDeps(ctx context.Context, m manager.Manager, ns, name, version stri
 	if repo != "" {
 		repositories[formatPackage(pm, ns, name)] = repo
 	}
+	resolvedVersion, _ := deps["resolved_version"].(string)
+	if resolvedVersion == "" {
+		resolvedVersion = version
+	}
 	if !recursive {
-		res := map[string]interface{}{"dependencies": deps["dependencies"], "repositories": repositories}
-		if rdb != nil {
+		res := map[string]interface{}{"dependencies": deps["dependencies"], "repositories": repositories, "resolved_version": resolvedVersion}
+		if cache != nil {
 			if data, err := json.Marshal(res); err == nil {
-				rdb.Set(ctx, cacheKey(pm, ns, name, version, recursive, false, false), data, ttl)
+				cache.set(ctx, cacheKey(pm, ns, name, version, recursive, false, false), data, ttl)
 			}
 		}
 		return res, nil, nil, nil
@@ -143,7 +211,7 @@ func fetchAllDeps(ctx context.Context, m manager.Manager, ns, name, version stri
 	parents := make(map[string][]string)
 	var errs []string
 	for k, v := range depMap {
-		vs := normalizeVersion(fmt.Sprint(v))
+		vs := dependencyVersion(pm, fmt.Sprint(v))
 		result[k] = vs
 		if _, ok := parents[k]; !ok {
 			parents[k] = []string{}
@@ -151,19 +219,22 @@ func fetchAllDeps(ctx context.Context, m manager.Manager, ns, name, version stri
 		if !contains(parents[k], parent) {
 			parents[k] = append(parents[k], parent)
 		}
-		id := fmt.Sprintf("%s:%s:%s", k, m, vs)
+		id := fmt.Sprintf("%s:%s:%s", pm, k, vs)
 		if _, ok := visited[id]; ok {
 			continue
 		}
 		visited[id] = struct{}{}
 		dns, dname := splitDep(k)
-		sub, subParents, subErrs, err := fetchAllDeps(ctx, m, dns, dname, vs, recursive, visited, k, pm, rdb, ttl)
+		sub, subParents, subErrs, err := fetchAllDeps(ctx, m, dns, dname, vs, recursive, visited, k, pm, cache, ttl)
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s@%s: %v", k, vs, err))
 			continue
 		}
 		errs = append(errs, subErrs...)
 		subMap, _ := sub["dependencies"].(map[string]interface{})
+		if subResolved, _ := sub["resolved_version"].(string); subResolved != "" {
+			result[k] = subResolved
+		}
 		for sk, sv := range subMap {
 			if _, ok := result[sk]; !ok {
 				result[sk] = sv
@@ -186,13 +257,13 @@ func fetchAllDeps(ctx context.Context, m manager.Manager, ns, name, version stri
 			}
 		}
 	}
-	res := map[string]interface{}{"dependencies": result, "parents": parents, "repositories": repositories}
+	res := map[string]interface{}{"dependencies": result, "parents": parents, "repositories": repositories, "resolved_version": resolvedVersion}
 	if len(errs) > 0 {
 		res["errors"] = errs
 	}
-	if rdb != nil {
+	if cache != nil {
 		if data, err := json.Marshal(res); err == nil {
-			rdb.Set(ctx, cacheKey(pm, ns, name, version, recursive, false, false), data, ttl)
+			cache.set(ctx, cacheKey(pm, ns, name, version, recursive, false, false), data, ttl)
 		}
 	}
 	return res, parents, errs, nil
@@ -228,6 +299,15 @@ func normalizeVersion(v string) string {
 	return v
 }
 
+func dependencyVersion(pm, v string) string {
+	switch pm {
+	case "go", "composer":
+		return strings.TrimSpace(v)
+	default:
+		return normalizeVersion(v)
+	}
+}
+
 func splitDep(dep string) (string, string) {
 	if strings.HasPrefix(dep, "@") {
 		if i := strings.Index(dep, "/"); i > 0 {
@@ -255,6 +335,10 @@ func queryBool(req *http.Request, key string, def bool) bool {
 		return def
 	}
 	return b
+}
+
+func pathVar(vars map[string]string, key string) (string, error) {
+	return url.PathUnescape(vars[key])
 }
 
 func formatPackage(manager, ns, name string) string {
@@ -301,7 +385,7 @@ func cacheKey(pm, ns, name, version string, recursive, vuln, score bool) string 
 		key += ":trans"
 	}
 	if vuln {
-		key += ":v"
+		key += ":v2"
 	}
 	if score {
 		key += ":sc"
@@ -309,25 +393,28 @@ func cacheKey(pm, ns, name, version string, recursive, vuln, score bool) string 
 	return key
 }
 
-func purlCacheKey(purl string, recursive, vuln, score bool) string {
+func purlCacheKey(purl string, recursive, vuln, score, graph bool) string {
 	key := fmt.Sprintf("purl:%s", purl)
 	if recursive {
 		key += ":trans"
 	}
 	if vuln {
-		key += ":v"
+		key += ":v2"
 	}
 	if score {
 		key += ":sc"
 	}
+	if graph {
+		key += ":dot"
+	}
 	return key
 }
 
-func fetchVulns(ctx context.Context, ecosystem, name, version string, rdb *redis.Client, ttl time.Duration) ([]map[string]interface{}, error) {
+func fetchVulns(ctx context.Context, ecosystem, name, version string, cache *redisCache, ttl time.Duration) ([]map[string]interface{}, error) {
 	var key string
-	if rdb != nil {
+	if cache != nil {
 		key = fmt.Sprintf("osv:%s:%s@%s", ecosystem, name, version)
-		if val, err := rdb.Get(ctx, key).Result(); err == nil {
+		if val, ok := cache.get(ctx, key); ok {
 			var cached []map[string]interface{}
 			if json.Unmarshal([]byte(val), &cached) == nil {
 				return cached, nil
@@ -361,30 +448,83 @@ func fetchVulns(ctx context.Context, ecosystem, name, version string, rdb *redis
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, err
 	}
-	if rdb != nil {
+	if cache != nil {
 		if data, err := json.Marshal(out.Vulns); err == nil {
-			rdb.Set(ctx, key, data, ttl)
+			cache.set(ctx, key, data, ttl)
 		}
 	}
 	return out.Vulns, nil
 }
 
-func collectVulnerabilities(ctx context.Context, manager, ns, name, version string, deps map[string]interface{}, rdb *redis.Client, ttl time.Duration) map[string]interface{} {
+type vulnerabilityStatus struct {
+	Status        string `json:"status"`
+	Checked       bool   `json:"checked"`
+	AdvisoryCount int    `json:"advisory_count"`
+	Error         string `json:"error,omitempty"`
+}
+
+type vulnerabilityResult struct {
+	Vulnerabilities map[string]interface{}
+	Status          map[string]vulnerabilityStatus
+}
+
+func collectVulnerabilities(ctx context.Context, manager, ns, name, version string, deps map[string]interface{}, cache *redisCache, ttl time.Duration) vulnerabilityResult {
 	eco := osvEcosystem[manager]
-	result := make(map[string]interface{})
-	rootPkg := formatPackage(manager, ns, name)
-	if vulns, err := fetchVulns(ctx, eco, rootPkg, version, rdb, ttl); err == nil && len(vulns) > 0 {
-		result[rootPkg] = vulns
+	result := vulnerabilityResult{
+		Vulnerabilities: make(map[string]interface{}),
+		Status:          make(map[string]vulnerabilityStatus),
 	}
-	for dep, v := range deps {
-		if vulns, err := fetchVulns(ctx, eco, dep, fmt.Sprint(v), rdb, ttl); err == nil && len(vulns) > 0 {
-			result[dep] = vulns
+
+	record := func(pkg, ver string) {
+		if pkg == "" {
+			return
 		}
+		if _, exists := result.Status[pkg]; exists {
+			return
+		}
+		if eco == "" {
+			result.Status[pkg] = vulnerabilityStatus{
+				Status: "not_checked",
+				Error:  "unsupported OSV ecosystem",
+			}
+			return
+		}
+		if strings.TrimSpace(ver) == "" {
+			result.Status[pkg] = vulnerabilityStatus{
+				Status: "not_checked",
+				Error:  "no resolved version",
+			}
+			return
+		}
+		vulns, err := fetchVulns(ctx, eco, pkg, ver, cache, ttl)
+		if err != nil {
+			result.Status[pkg] = vulnerabilityStatus{
+				Status: "unknown",
+				Error:  err.Error(),
+			}
+			return
+		}
+		status := vulnerabilityStatus{
+			Status:        "no_advisory",
+			Checked:       true,
+			AdvisoryCount: len(vulns),
+		}
+		if len(vulns) > 0 {
+			status.Status = "vulnerable"
+			result.Vulnerabilities[pkg] = vulns
+		}
+		result.Status[pkg] = status
+	}
+
+	rootPkg := formatPackage(manager, ns, name)
+	record(rootPkg, version)
+	for dep, v := range deps {
+		record(dep, fmt.Sprint(v))
 	}
 	return result
 }
 
-func fetchScorecard(ctx context.Context, repo string, rdb *redis.Client, ttl time.Duration) (map[string]interface{}, error) {
+func fetchScorecard(ctx context.Context, repo string, cache *redisCache, ttl time.Duration) (map[string]interface{}, error) {
 	url := fmt.Sprintf("https://api.securityscorecards.dev/projects/%s", repo)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -406,7 +546,7 @@ func fetchScorecard(ctx context.Context, repo string, rdb *redis.Client, ttl tim
 	return out, nil
 }
 
-func collectScorecards(ctx context.Context, manager, ns, name string, deps map[string]interface{}, repos map[string]string, rdb *redis.Client, ttl time.Duration) map[string]interface{} {
+func collectScorecards(ctx context.Context, manager, ns, name string, deps map[string]interface{}, repos map[string]string, cache *redisCache, ttl time.Duration) map[string]interface{} {
 	result := make(map[string]interface{})
 	rootPkg := formatPackage(manager, ns, name)
 	repo := repos[rootPkg]
@@ -414,7 +554,7 @@ func collectScorecards(ctx context.Context, manager, ns, name string, deps map[s
 		repo = repoFromPackage(manager, rootPkg)
 	}
 	if repo != "" {
-		if sc, err := fetchScorecard(ctx, repo, rdb, ttl); err == nil {
+		if sc, err := fetchScorecard(ctx, repo, cache, ttl); err == nil {
 			result[rootPkg] = sc
 		}
 	}
@@ -424,7 +564,7 @@ func collectScorecards(ctx context.Context, manager, ns, name string, deps map[s
 			repo = repoFromPackage(manager, dep)
 		}
 		if repo != "" {
-			if sc, err := fetchScorecard(ctx, repo, rdb, ttl); err == nil {
+			if sc, err := fetchScorecard(ctx, repo, cache, ttl); err == nil {
 				result[dep] = sc
 			}
 		}
@@ -447,9 +587,153 @@ func depsToDot(root string, deps map[string]interface{}) string {
 	return b.String()
 }
 
-func npmSearch(ctx context.Context, query string) ([]map[string]string, error) {
-	url := fmt.Sprintf("https://registry.npmjs.org/-/v1/search?text=%s&size=10", url.QueryEscape(query))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+type packageSuggestion struct {
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name"`
+	Version   string `json:"version,omitempty"`
+}
+
+type versionInfo struct {
+	Namespace string   `json:"namespace,omitempty"`
+	Name      string   `json:"name"`
+	Latest    string   `json:"latest,omitempty"`
+	Versions  []string `json:"versions"`
+}
+
+const versionSuggestionLimit = 250
+
+func getJSON(ctx context.Context, endpoint string, out interface{}) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "oss-deps-explorer/1.0")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("metadata endpoint returned status %d", resp.StatusCode)
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func packageSearch(ctx context.Context, manager, query string) ([]packageSuggestion, error) {
+	switch manager {
+	case "npm":
+		return npmSearch(ctx, query)
+	case "pypi":
+		info, err := pypiVersions(ctx, query)
+		if err != nil {
+			return nil, err
+		}
+		return []packageSuggestion{{Name: info.Name, Version: info.Latest}}, nil
+	case "go":
+		return []packageSuggestion{{Name: query}}, nil
+	case "maven":
+		return mavenSearch(ctx, query)
+	case "cargo":
+		return cargoSearch(ctx, query)
+	case "rubygems":
+		return rubyGemsSearch(ctx, query)
+	case "nuget":
+		return nugetSearch(ctx, query)
+	case "composer":
+		return composerSearch(ctx, query)
+	default:
+		return nil, fmt.Errorf("unsupported package manager")
+	}
+}
+
+func packageVersions(ctx context.Context, manager, namespace, name string) (*versionInfo, error) {
+	switch manager {
+	case "npm":
+		return npmVersions(ctx, namespace, name)
+	case "pypi":
+		return pypiVersions(ctx, name)
+	case "go":
+		return goVersions(ctx, namespace, name)
+	case "maven":
+		return mavenVersions(ctx, namespace, name)
+	case "cargo":
+		return cargoVersions(ctx, name)
+	case "rubygems":
+		return rubyGemsVersions(ctx, name)
+	case "nuget":
+		return nugetVersions(ctx, name)
+	case "composer":
+		return composerVersions(ctx, namespace, name)
+	default:
+		return nil, fmt.Errorf("unsupported package manager")
+	}
+}
+
+func npmSearch(ctx context.Context, query string) ([]packageSuggestion, error) {
+	endpoint := fmt.Sprintf("https://registry.npmjs.org/-/v1/search?text=%s&size=10", url.QueryEscape(query))
+	var out struct {
+		Objects []struct {
+			Package struct {
+				Name    string `json:"name"`
+				Version string `json:"version"`
+			} `json:"package"`
+		} `json:"objects"`
+	}
+	if err := getJSON(ctx, endpoint, &out); err != nil {
+		return nil, err
+	}
+	results := make([]packageSuggestion, 0, len(out.Objects))
+	for _, obj := range out.Objects {
+		ns, name := splitPackageForManager("npm", obj.Package.Name)
+		results = append(results, packageSuggestion{Namespace: ns, Name: name, Version: obj.Package.Version})
+	}
+	return results, nil
+}
+
+func npmVersions(ctx context.Context, namespace, name string) (*versionInfo, error) {
+	pkg := name
+	if namespace != "" {
+		pkg = namespace + "/" + name
+	}
+	var out struct {
+		DistTags map[string]string          `json:"dist-tags"`
+		Versions map[string]json.RawMessage `json:"versions"`
+	}
+	if err := getJSON(ctx, fmt.Sprintf("https://registry.npmjs.org/%s", url.PathEscape(pkg)), &out); err != nil {
+		return nil, err
+	}
+	versions := mapKeys(out.Versions)
+	sortVersionStrings(versions)
+	return &versionInfo{Namespace: namespace, Name: name, Latest: out.DistTags["latest"], Versions: limitStrings(versions, versionSuggestionLimit)}, nil
+}
+
+func pypiVersions(ctx context.Context, name string) (*versionInfo, error) {
+	var out struct {
+		Info struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"info"`
+		Releases map[string]json.RawMessage `json:"releases"`
+	}
+	if err := getJSON(ctx, fmt.Sprintf("https://pypi.org/pypi/%s/json", url.PathEscape(name)), &out); err != nil {
+		return nil, err
+	}
+	versions := mapKeys(out.Releases)
+	sortVersionStrings(versions)
+	pkgName := out.Info.Name
+	if pkgName == "" {
+		pkgName = name
+	}
+	return &versionInfo{Name: pkgName, Latest: out.Info.Version, Versions: limitStrings(versions, versionSuggestionLimit)}, nil
+}
+
+func goVersions(ctx context.Context, namespace, name string) (*versionInfo, error) {
+	module := name
+	if namespace != "" {
+		module = namespace + "/" + name
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("https://proxy.golang.org/%s/@v/list", escapePathSegments(module)), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -459,32 +743,397 @@ func npmSearch(ctx context.Context, query string) ([]map[string]string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("npm search returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("go proxy returned status %d", resp.StatusCode)
 	}
-	var out struct {
-		Objects []struct {
-			Package struct {
-				Name    string `json:"name"`
-				Version string `json:"version"`
-			} `json:"package"`
-		} `json:"objects"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(resp.Body); err != nil {
 		return nil, err
 	}
-	results := make([]map[string]string, 0, len(out.Objects))
-	for _, obj := range out.Objects {
-		results = append(results, map[string]string{
-			"name":    obj.Package.Name,
-			"version": obj.Package.Version,
-		})
+	versions := strings.Fields(buf.String())
+	sortVersionStrings(versions)
+	latest := ""
+	if len(versions) > 0 {
+		latest = versions[0]
+	}
+	ns, pkgName := splitPackageForManager("go", module)
+	return &versionInfo{Namespace: ns, Name: pkgName, Latest: latest, Versions: limitStrings(versions, versionSuggestionLimit)}, nil
+}
+
+func mavenSearch(ctx context.Context, query string) ([]packageSuggestion, error) {
+	if strings.Contains(query, ":") {
+		ns, name := splitPackageForManager("maven", query)
+		return []packageSuggestion{{Namespace: ns, Name: name}}, nil
+	}
+	endpoint := fmt.Sprintf("https://search.maven.org/solrsearch/select?q=%s&rows=10&wt=json", url.QueryEscape(fmt.Sprintf("a:%q", query)))
+	var out struct {
+		Response struct {
+			Docs []struct {
+				GroupID       string `json:"g"`
+				ArtifactID    string `json:"a"`
+				LatestVersion string `json:"latestVersion"`
+			} `json:"docs"`
+		} `json:"response"`
+	}
+	if err := getJSON(ctx, endpoint, &out); err != nil {
+		return nil, err
+	}
+	results := make([]packageSuggestion, 0, len(out.Response.Docs))
+	for _, doc := range out.Response.Docs {
+		results = append(results, packageSuggestion{Namespace: doc.GroupID, Name: doc.ArtifactID, Version: doc.LatestVersion})
 	}
 	return results, nil
 }
 
-func fetchRepoMetadata(ctx context.Context, repo string, rdb *redis.Client, ttl time.Duration) (map[string]interface{}, error) {
-	if rdb != nil {
-		if val, err := rdb.Get(ctx, "repometa:"+repo).Result(); err == nil {
+func mavenVersions(ctx context.Context, namespace, name string) (*versionInfo, error) {
+	if namespace == "" {
+		suggestions, err := mavenSearch(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		if len(suggestions) == 0 {
+			return nil, fmt.Errorf("maven package not found")
+		}
+		namespace = suggestions[0].Namespace
+		name = suggestions[0].Name
+	}
+	endpoint := fmt.Sprintf("https://search.maven.org/solrsearch/select?q=%s&core=gav&rows=%d&wt=json", url.QueryEscape(fmt.Sprintf("g:%q AND a:%q", namespace, name)), versionSuggestionLimit)
+	var out struct {
+		Response struct {
+			Docs []struct {
+				Version string `json:"v"`
+			} `json:"docs"`
+		} `json:"response"`
+	}
+	if err := getJSON(ctx, endpoint, &out); err != nil {
+		return nil, err
+	}
+	versions := make([]string, 0, len(out.Response.Docs))
+	seen := map[string]struct{}{}
+	for _, doc := range out.Response.Docs {
+		if doc.Version == "" {
+			continue
+		}
+		if _, ok := seen[doc.Version]; ok {
+			continue
+		}
+		seen[doc.Version] = struct{}{}
+		versions = append(versions, doc.Version)
+	}
+	latest := ""
+	if len(versions) > 0 {
+		latest = versions[0]
+	}
+	return &versionInfo{Namespace: namespace, Name: name, Latest: latest, Versions: limitStrings(versions, versionSuggestionLimit)}, nil
+}
+
+func cargoSearch(ctx context.Context, query string) ([]packageSuggestion, error) {
+	var out struct {
+		Crates []struct {
+			Name    string `json:"name"`
+			Version string `json:"newest_version"`
+		} `json:"crates"`
+	}
+	if err := getJSON(ctx, fmt.Sprintf("https://crates.io/api/v1/crates?q=%s&per_page=10", url.QueryEscape(query)), &out); err != nil {
+		return nil, err
+	}
+	results := make([]packageSuggestion, 0, len(out.Crates))
+	for _, c := range out.Crates {
+		results = append(results, packageSuggestion{Name: c.Name, Version: c.Version})
+	}
+	return results, nil
+}
+
+func cargoVersions(ctx context.Context, name string) (*versionInfo, error) {
+	var out struct {
+		Crate struct {
+			Name          string `json:"name"`
+			NewestVersion string `json:"newest_version"`
+			MaxVersion    string `json:"max_version"`
+		} `json:"crate"`
+		Versions []struct {
+			Number string `json:"num"`
+		} `json:"versions"`
+	}
+	if err := getJSON(ctx, fmt.Sprintf("https://crates.io/api/v1/crates/%s", url.PathEscape(name)), &out); err != nil {
+		return nil, err
+	}
+	versions := make([]string, 0, len(out.Versions))
+	for _, v := range out.Versions {
+		if v.Number != "" {
+			versions = append(versions, v.Number)
+		}
+	}
+	sortVersionStrings(versions)
+	latest := out.Crate.NewestVersion
+	if latest == "" {
+		latest = out.Crate.MaxVersion
+	}
+	pkgName := out.Crate.Name
+	if pkgName == "" {
+		pkgName = name
+	}
+	return &versionInfo{Name: pkgName, Latest: latest, Versions: limitStrings(versions, versionSuggestionLimit)}, nil
+}
+
+func rubyGemsSearch(ctx context.Context, query string) ([]packageSuggestion, error) {
+	var out []struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	}
+	if err := getJSON(ctx, fmt.Sprintf("https://rubygems.org/api/v1/search.json?query=%s", url.QueryEscape(query)), &out); err != nil {
+		return nil, err
+	}
+	results := make([]packageSuggestion, 0, len(out))
+	for _, gem := range out {
+		results = append(results, packageSuggestion{Name: gem.Name, Version: gem.Version})
+	}
+	return results, nil
+}
+
+func rubyGemsVersions(ctx context.Context, name string) (*versionInfo, error) {
+	var out []struct {
+		Number string `json:"number"`
+	}
+	if err := getJSON(ctx, fmt.Sprintf("https://rubygems.org/api/v1/versions/%s.json", url.PathEscape(name)), &out); err != nil {
+		return nil, err
+	}
+	versions := make([]string, 0, len(out))
+	for _, v := range out {
+		if v.Number != "" {
+			versions = append(versions, v.Number)
+		}
+	}
+	sortVersionStrings(versions)
+	latest := ""
+	if len(versions) > 0 {
+		latest = versions[0]
+	}
+	return &versionInfo{Name: name, Latest: latest, Versions: limitStrings(versions, versionSuggestionLimit)}, nil
+}
+
+func nugetSearch(ctx context.Context, query string) ([]packageSuggestion, error) {
+	var out struct {
+		Data []struct {
+			ID      string `json:"id"`
+			Version string `json:"version"`
+		} `json:"data"`
+	}
+	if err := getJSON(ctx, fmt.Sprintf("https://azuresearch-usnc.nuget.org/query?q=%s&take=10&prerelease=false", url.QueryEscape(query)), &out); err != nil {
+		return nil, err
+	}
+	results := make([]packageSuggestion, 0, len(out.Data))
+	for _, pkg := range out.Data {
+		results = append(results, packageSuggestion{Name: pkg.ID, Version: pkg.Version})
+	}
+	return results, nil
+}
+
+func nugetVersions(ctx context.Context, name string) (*versionInfo, error) {
+	pkg := strings.ToLower(name)
+	var out struct {
+		Versions []string `json:"versions"`
+	}
+	if err := getJSON(ctx, fmt.Sprintf("https://api.nuget.org/v3-flatcontainer/%s/index.json", url.PathEscape(pkg)), &out); err != nil {
+		return nil, err
+	}
+	versions := append([]string(nil), out.Versions...)
+	versions = stableVersions(versions)
+	sortVersionStrings(versions)
+	latest := ""
+	if len(versions) > 0 {
+		latest = versions[0]
+	}
+	return &versionInfo{Name: name, Latest: latest, Versions: limitStrings(versions, versionSuggestionLimit)}, nil
+}
+
+func stableVersions(values []string) []string {
+	stable := values[:0]
+	for _, v := range values {
+		if !strings.Contains(v, "-") {
+			stable = append(stable, v)
+		}
+	}
+	return stable
+}
+
+func composerSearch(ctx context.Context, query string) ([]packageSuggestion, error) {
+	if strings.Contains(query, "/") {
+		ns, name := splitPackageForManager("composer", query)
+		return []packageSuggestion{{Namespace: ns, Name: name}}, nil
+	}
+	var out struct {
+		Results []struct {
+			Name string `json:"name"`
+		} `json:"results"`
+	}
+	if err := getJSON(ctx, fmt.Sprintf("https://packagist.org/search.json?q=%s", url.QueryEscape(query)), &out); err != nil {
+		return nil, err
+	}
+	results := make([]packageSuggestion, 0, len(out.Results))
+	for _, pkg := range out.Results {
+		ns, name := splitPackageForManager("composer", pkg.Name)
+		results = append(results, packageSuggestion{Namespace: ns, Name: name})
+	}
+	return results, nil
+}
+
+func composerVersions(ctx context.Context, namespace, name string) (*versionInfo, error) {
+	if namespace == "" {
+		if strings.Contains(name, "/") {
+			namespace, name = splitPackageForManager("composer", name)
+		} else {
+			suggestions, err := composerSearch(ctx, name)
+			if err != nil {
+				return nil, err
+			}
+			if len(suggestions) == 0 {
+				return nil, fmt.Errorf("composer package not found")
+			}
+			namespace = suggestions[0].Namespace
+			name = suggestions[0].Name
+		}
+	}
+	pkg := namespace + "/" + name
+	var out struct {
+		Packages map[string][]struct {
+			Version string `json:"version"`
+		} `json:"packages"`
+	}
+	if err := getJSON(ctx, fmt.Sprintf("https://repo.packagist.org/p2/%s.json", url.PathEscape(pkg)), &out); err != nil {
+		return nil, err
+	}
+	list := out.Packages[pkg]
+	versions := make([]string, 0, len(list))
+	for _, v := range list {
+		if v.Version != "" && !strings.HasPrefix(v.Version, "dev-") {
+			versions = append(versions, v.Version)
+		}
+	}
+	latest := ""
+	if len(versions) > 0 {
+		latest = versions[0]
+	}
+	return &versionInfo{Namespace: namespace, Name: name, Latest: latest, Versions: limitStrings(versions, versionSuggestionLimit)}, nil
+}
+
+func splitPackageForManager(manager, pkg string) (string, string) {
+	switch manager {
+	case "npm":
+		if strings.HasPrefix(pkg, "@") {
+			if i := strings.Index(pkg, "/"); i > 0 {
+				return pkg[:i], pkg[i+1:]
+			}
+		}
+	case "maven":
+		if strings.Contains(pkg, ":") {
+			parts := strings.SplitN(pkg, ":", 2)
+			return parts[0], parts[1]
+		}
+	case "go", "composer":
+		if strings.Count(pkg, "/") > 0 {
+			idx := strings.Index(pkg, "/")
+			return pkg[:idx], pkg[idx+1:]
+		}
+	}
+	return "", pkg
+}
+
+func escapePathSegments(path string) string {
+	parts := strings.Split(path, "/")
+	for i, part := range parts {
+		parts[i] = url.PathEscape(part)
+	}
+	return strings.Join(parts, "/")
+}
+
+func mapKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func limitStrings(values []string, limit int) []string {
+	if len(values) <= limit {
+		return values
+	}
+	return values[:limit]
+}
+
+func sortVersionStrings(values []string) {
+	sort.SliceStable(values, func(i, j int) bool {
+		return compareVersionStrings(values[i], values[j]) > 0
+	})
+}
+
+func compareVersionStrings(a, b string) int {
+	va := semverish(a)
+	vb := semverish(b)
+	if semver.IsValid(va) && semver.IsValid(vb) {
+		return semver.Compare(va, vb)
+	}
+	return naturalCompare(a, b)
+}
+
+func semverish(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+	v = strings.TrimPrefix(v, "v")
+	parts := strings.SplitN(v, "-", 2)
+	nums := strings.Split(parts[0], ".")
+	for len(nums) < 3 {
+		nums = append(nums, "0")
+	}
+	out := "v" + strings.Join(nums[:3], ".")
+	if len(parts) == 2 {
+		out += "-" + parts[1]
+	}
+	return out
+}
+
+func naturalCompare(a, b string) int {
+	as := versionRe.FindAllString(a, -1)
+	bs := versionRe.FindAllString(b, -1)
+	for i := 0; i < len(as) && i < len(bs); i++ {
+		ai, aerr := strconv.Atoi(as[i])
+		bi, berr := strconv.Atoi(bs[i])
+		if aerr == nil && berr == nil {
+			if ai > bi {
+				return 1
+			}
+			if ai < bi {
+				return -1
+			}
+			continue
+		}
+		if as[i] > bs[i] {
+			return 1
+		}
+		if as[i] < bs[i] {
+			return -1
+		}
+	}
+	if len(as) > len(bs) {
+		return 1
+	}
+	if len(as) < len(bs) {
+		return -1
+	}
+	if a > b {
+		return 1
+	}
+	if a < b {
+		return -1
+	}
+	return 0
+}
+
+func fetchRepoMetadata(ctx context.Context, repo string, cache *redisCache, ttl time.Duration) (map[string]interface{}, error) {
+	if cache != nil {
+		if val, ok := cache.get(ctx, "repometa:"+repo); ok {
 			var cached map[string]interface{}
 			if json.Unmarshal([]byte(val), &cached) == nil {
 				return cached, nil
@@ -560,9 +1209,9 @@ func fetchRepoMetadata(ctx context.Context, repo string, rdb *redis.Client, ttl 
 		meta["last_commit"] = last
 	}
 
-	if rdb != nil {
+	if cache != nil {
 		if data, err := json.Marshal(meta); err == nil {
-			rdb.Set(ctx, "repometa:"+repo, data, ttl)
+			cache.set(ctx, "repometa:"+repo, data, ttl)
 		}
 	}
 	return meta, nil
@@ -690,13 +1339,10 @@ func main() {
 		http.DefaultTransport = tr
 	}
 
-	rdb := redis.NewClient(&redis.Options{
-		Addr:     cfg.Redis.Addr,
-		Password: cfg.Redis.Password,
-		DB:       cfg.Redis.DB,
-	})
+	cache := newRedisCache(cfg)
 
 	r := mux.NewRouter()
+	r.UseEncodedPath()
 	r.Use(logRequests)
 
 	r.HandleFunc("/api/config", func(w http.ResponseWriter, req *http.Request) {
@@ -706,8 +1352,16 @@ func main() {
 
 	r.HandleFunc("/api/suggest/{manager}/{query}", func(w http.ResponseWriter, req *http.Request) {
 		vars := mux.Vars(req)
-		pm := vars["manager"]
-		q := vars["query"]
+		pm, err := pathVar(vars, "manager")
+		if err != nil {
+			http.Error(w, "invalid package manager", http.StatusBadRequest)
+			return
+		}
+		q, err := pathVar(vars, "query")
+		if err != nil {
+			http.Error(w, "invalid query", http.StatusBadRequest)
+			return
+		}
 		if q == "" {
 			http.Error(w, "query required", http.StatusBadRequest)
 			return
@@ -715,30 +1369,55 @@ func main() {
 
 		key := fmt.Sprintf("suggest:%s:%s", pm, q)
 		ctx := req.Context()
-		if val, err := rdb.Get(ctx, key).Result(); err == nil {
+		if val, ok := cache.get(ctx, key); ok {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Cache-Status", "HIT")
 			w.Write([]byte(val))
 			return
 		}
 
-		var results []map[string]string
-		var err error
-		switch pm {
-		case "npm":
-			results, err = npmSearch(ctx, q)
-		default:
-			http.Error(w, "unsupported package manager", http.StatusBadRequest)
-			return
-		}
+		results, err := packageSearch(ctx, pm, q)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		data, err := json.Marshal(results)
 		if err == nil {
-			rdb.Set(ctx, key, data, cfg.Cache.TTL)
+			cache.set(ctx, key, data, cfg.Cache.TTL)
 		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Cache-Status", "MISS")
+		w.Write(data)
+	}).Methods(http.MethodGet)
+
+	r.HandleFunc("/api/versions", func(w http.ResponseWriter, req *http.Request) {
+		q := req.URL.Query()
+		pm := q.Get("manager")
+		ns := q.Get("namespace")
+		name := q.Get("name")
+		if pm == "" || name == "" {
+			http.Error(w, "manager and name required", http.StatusBadRequest)
+			return
+		}
+		key := fmt.Sprintf("versions:v2:%s:%s:%s", pm, ns, name)
+		ctx := req.Context()
+		if val, ok := cache.get(ctx, key); ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Cache-Status", "HIT")
+			w.Write([]byte(val))
+			return
+		}
+		info, err := packageVersions(ctx, pm, ns, name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		data, err := json.Marshal(info)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		cache.set(ctx, key, data, cfg.Cache.TTL)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache-Status", "MISS")
 		w.Write(data)
@@ -746,9 +1425,14 @@ func main() {
 
 	r.HandleFunc("/api/repo/{repo:.*}", func(w http.ResponseWriter, req *http.Request) {
 		vars := mux.Vars(req)
-		repo := strings.TrimPrefix(vars["repo"], "github.com/")
+		rawRepo, err := pathVar(vars, "repo")
+		if err != nil {
+			http.Error(w, "invalid repository", http.StatusBadRequest)
+			return
+		}
+		repo := strings.TrimPrefix(rawRepo, "github.com/")
 		ctx := req.Context()
-		meta, err := fetchRepoMetadata(ctx, repo, rdb, cfg.Cache.TTL)
+		meta, err := fetchRepoMetadata(ctx, repo, cache, cfg.Cache.TTL)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -790,14 +1474,14 @@ func main() {
 
 		key := cacheKey(pm, ns, name, version, recursive, vflag, sflag)
 		ctx := req.Context()
-		if val, err := rdb.Get(ctx, key).Result(); err == nil {
+		if val, ok := cache.get(ctx, key); ok {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Cache-Status", "HIT")
 			w.Write([]byte(val))
 			return
 		}
 
-		deps, _, errs, err := fetchAllDeps(ctx, m, ns, name, version, recursive, map[string]struct{}{}, "", pm, rdb, cfg.Cache.TTL)
+		deps, _, errs, err := fetchAllDeps(ctx, m, ns, name, version, recursive, map[string]struct{}{}, "", pm, cache, cfg.Cache.TTL)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -807,22 +1491,25 @@ func main() {
 		}
 		if vflag {
 			depMap, _ := deps["dependencies"].(map[string]interface{})
-			vulns := collectVulnerabilities(ctx, pm, ns, name, version, depMap, rdb, cfg.Cache.TTL)
-			if len(vulns) > 0 {
-				deps["vulnerabilities"] = vulns
+			vulns := collectVulnerabilities(ctx, pm, ns, name, version, depMap, cache, cfg.Cache.TTL)
+			if len(vulns.Vulnerabilities) > 0 {
+				deps["vulnerabilities"] = vulns.Vulnerabilities
+			}
+			if len(vulns.Status) > 0 {
+				deps["vulnerability_status"] = vulns.Status
 			}
 		}
 		if sflag {
 			depMap, _ := deps["dependencies"].(map[string]interface{})
 			repoMap, _ := deps["repositories"].(map[string]string)
-			scs := collectScorecards(ctx, pm, ns, name, depMap, repoMap, rdb, cfg.Cache.TTL)
+			scs := collectScorecards(ctx, pm, ns, name, depMap, repoMap, cache, cfg.Cache.TTL)
 			if len(scs) > 0 {
 				deps["scorecards"] = scs
 			}
 		}
 		data, err := json.Marshal(deps)
 		if err == nil {
-			rdb.Set(ctx, key, data, cfg.Cache.TTL)
+			cache.set(ctx, key, data, cfg.Cache.TTL)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache-Status", "MISS")
@@ -832,8 +1519,16 @@ func main() {
 	// special route for Go modules which may contain slashes in the module path
 	r.HandleFunc("/api/dependencies/go/{module:.+}/{version}", func(w http.ResponseWriter, req *http.Request) {
 		vars := mux.Vars(req)
-		module := vars["module"]
-		version := vars["version"]
+		module, err := pathVar(vars, "module")
+		if err != nil {
+			http.Error(w, "invalid module", http.StatusBadRequest)
+			return
+		}
+		version, err := pathVar(vars, "version")
+		if err != nil {
+			http.Error(w, "invalid version", http.StatusBadRequest)
+			return
+		}
 
 		parts := strings.SplitN(module, "/", 2)
 		ns := ""
@@ -861,14 +1556,14 @@ func main() {
 		reqScore := queryBool(req, "scorecard", withScorecard)
 		key := cacheKey("go", ns, name, version, reqRecurse, reqVuln, reqScore)
 		ctx := req.Context()
-		if cached, err := rdb.Get(ctx, key).Result(); err == nil {
+		if cached, ok := cache.get(ctx, key); ok {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Cache-Status", "HIT")
 			w.Write([]byte(cached))
 			return
 		}
 
-		deps, _, errs, err := fetchAllDeps(ctx, m, ns, name, version, reqRecurse, map[string]struct{}{}, "", "go", rdb, cfg.Cache.TTL)
+		deps, _, errs, err := fetchAllDeps(ctx, m, ns, name, version, reqRecurse, map[string]struct{}{}, "", "go", cache, cfg.Cache.TTL)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -880,15 +1575,18 @@ func main() {
 		if reqVuln {
 			depMap, _ := deps["dependencies"].(map[string]interface{})
 
-			vulns := collectVulnerabilities(ctx, "go", ns, name, version, depMap, rdb, cfg.Cache.TTL)
-			if len(vulns) > 0 {
-				deps["vulnerabilities"] = vulns
+			vulns := collectVulnerabilities(ctx, "go", ns, name, version, depMap, cache, cfg.Cache.TTL)
+			if len(vulns.Vulnerabilities) > 0 {
+				deps["vulnerabilities"] = vulns.Vulnerabilities
+			}
+			if len(vulns.Status) > 0 {
+				deps["vulnerability_status"] = vulns.Status
 			}
 		}
 		if reqScore {
 			depMap, _ := deps["dependencies"].(map[string]interface{})
 			repoMap, _ := deps["repositories"].(map[string]string)
-			scs := collectScorecards(ctx, "go", ns, name, depMap, repoMap, rdb, cfg.Cache.TTL)
+			scs := collectScorecards(ctx, "go", ns, name, depMap, repoMap, cache, cfg.Cache.TTL)
 			if len(scs) > 0 {
 				deps["scorecards"] = scs
 			}
@@ -898,16 +1596,20 @@ func main() {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		rdb.Set(ctx, key, data, cfg.Cache.TTL)
+		cache.set(ctx, key, data, cfg.Cache.TTL)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache-Status", "MISS")
 		w.Write(data)
 	}).Methods(http.MethodGet)
 
 	// lookup via package URL
-	r.HandleFunc("/api/purl/{purl}", func(w http.ResponseWriter, req *http.Request) {
+	r.HandleFunc("/api/purl/{purl:.*}", func(w http.ResponseWriter, req *http.Request) {
 		vars := mux.Vars(req)
-		pstr := vars["purl"]
+		pstr, err := url.PathUnescape(vars["purl"])
+		if err != nil {
+			http.Error(w, "invalid purl", http.StatusBadRequest)
+			return
+		}
 		pu, err := purl.FromString(pstr)
 		if err != nil {
 			http.Error(w, "invalid purl", http.StatusBadRequest)
@@ -933,11 +1635,14 @@ func main() {
 		name := pu.Name
 		version := pu.Version
 
+		reqRecurse := queryBool(req, "recursive", recurse)
+		reqVuln := queryBool(req, "vuln", withVuln)
 		reqScore := queryBool(req, "scorecard", withScorecard)
-		key := purlCacheKey(pstr, recurse, withVuln, reqScore)
+		reqGraph := queryBool(req, "graph", withGraph)
+		key := purlCacheKey(pstr, reqRecurse, reqVuln, reqScore, reqGraph)
 		ctx := req.Context()
-		if cached, err := rdb.Get(ctx, key).Result(); err == nil {
-			if withGraph {
+		if cached, ok := cache.get(ctx, key); ok {
+			if reqGraph {
 				w.Header().Set("Content-Type", "text/vnd.graphviz")
 			} else {
 				w.Header().Set("Content-Type", "application/json")
@@ -947,7 +1652,7 @@ func main() {
 			return
 		}
 
-		deps, _, errs, err := fetchAllDeps(ctx, m, ns, name, version, recurse, map[string]struct{}{}, "", pm, rdb, cfg.Cache.TTL)
+		deps, _, errs, err := fetchAllDeps(ctx, m, ns, name, version, reqRecurse, map[string]struct{}{}, "", pm, cache, cfg.Cache.TTL)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -956,23 +1661,26 @@ func main() {
 			deps["errors"] = errs
 		}
 		depMap, _ := deps["dependencies"].(map[string]interface{})
-		if withGraph {
+		if reqGraph {
 			dot := depsToDot(formatPackage(pm, ns, name), depMap)
-			rdb.Set(ctx, key, []byte(dot), cfg.Cache.TTL)
+			cache.set(ctx, key, []byte(dot), cfg.Cache.TTL)
 			w.Header().Set("Content-Type", "text/vnd.graphviz")
 			w.Header().Set("X-Cache-Status", "MISS")
 			w.Write([]byte(dot))
 			return
 		}
-		if withVuln {
-			vulns := collectVulnerabilities(ctx, pm, ns, name, version, depMap, rdb, cfg.Cache.TTL)
-			if len(vulns) > 0 {
-				deps["vulnerabilities"] = vulns
+		if reqVuln {
+			vulns := collectVulnerabilities(ctx, pm, ns, name, version, depMap, cache, cfg.Cache.TTL)
+			if len(vulns.Vulnerabilities) > 0 {
+				deps["vulnerabilities"] = vulns.Vulnerabilities
+			}
+			if len(vulns.Status) > 0 {
+				deps["vulnerability_status"] = vulns.Status
 			}
 		}
 		if reqScore {
 			repoMap, _ := deps["repositories"].(map[string]string)
-			scs := collectScorecards(ctx, pm, ns, name, depMap, repoMap, rdb, cfg.Cache.TTL)
+			scs := collectScorecards(ctx, pm, ns, name, depMap, repoMap, cache, cfg.Cache.TTL)
 			if len(scs) > 0 {
 				deps["scorecards"] = scs
 			}
@@ -982,7 +1690,7 @@ func main() {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		rdb.Set(ctx, key, data, cfg.Cache.TTL)
+		cache.set(ctx, key, data, cfg.Cache.TTL)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache-Status", "MISS")
 		w.Write(data)
@@ -991,10 +1699,26 @@ func main() {
 	// route with namespace
 	r.HandleFunc("/api/dependencies/{manager}/{namespace}/{name}/{version}", func(w http.ResponseWriter, req *http.Request) {
 		vars := mux.Vars(req)
-		pm := vars["manager"]
-		ns := vars["namespace"]
-		name := vars["name"]
-		version := vars["version"]
+		pm, err := pathVar(vars, "manager")
+		if err != nil {
+			http.Error(w, "invalid package manager", http.StatusBadRequest)
+			return
+		}
+		ns, err := pathVar(vars, "namespace")
+		if err != nil {
+			http.Error(w, "invalid namespace", http.StatusBadRequest)
+			return
+		}
+		name, err := pathVar(vars, "name")
+		if err != nil {
+			http.Error(w, "invalid package name", http.StatusBadRequest)
+			return
+		}
+		version, err := pathVar(vars, "version")
+		if err != nil {
+			http.Error(w, "invalid version", http.StatusBadRequest)
+			return
+		}
 
 		if err := validateName(name); err != nil {
 			http.Error(w, "invalid package name", http.StatusBadRequest)
@@ -1018,14 +1742,14 @@ func main() {
 		reqScore := queryBool(req, "scorecard", withScorecard)
 		key := cacheKey(pm, ns, name, version, reqRecurse, reqVuln, reqScore)
 		ctx := req.Context()
-		if cached, err := rdb.Get(ctx, key).Result(); err == nil {
+		if cached, ok := cache.get(ctx, key); ok {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Cache-Status", "HIT")
 			w.Write([]byte(cached))
 			return
 		}
 
-		deps, _, errs, err := fetchAllDeps(ctx, m, ns, name, version, reqRecurse, map[string]struct{}{}, "", pm, rdb, cfg.Cache.TTL)
+		deps, _, errs, err := fetchAllDeps(ctx, m, ns, name, version, reqRecurse, map[string]struct{}{}, "", pm, cache, cfg.Cache.TTL)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -1037,15 +1761,18 @@ func main() {
 		if reqVuln {
 			depMap, _ := deps["dependencies"].(map[string]interface{})
 
-			vulns := collectVulnerabilities(ctx, pm, ns, name, version, depMap, rdb, cfg.Cache.TTL)
-			if len(vulns) > 0 {
-				deps["vulnerabilities"] = vulns
+			vulns := collectVulnerabilities(ctx, pm, ns, name, version, depMap, cache, cfg.Cache.TTL)
+			if len(vulns.Vulnerabilities) > 0 {
+				deps["vulnerabilities"] = vulns.Vulnerabilities
+			}
+			if len(vulns.Status) > 0 {
+				deps["vulnerability_status"] = vulns.Status
 			}
 		}
 		if reqScore {
 			depMap, _ := deps["dependencies"].(map[string]interface{})
 			repoMap, _ := deps["repositories"].(map[string]string)
-			scs := collectScorecards(ctx, pm, ns, name, depMap, repoMap, rdb, cfg.Cache.TTL)
+			scs := collectScorecards(ctx, pm, ns, name, depMap, repoMap, cache, cfg.Cache.TTL)
 			if len(scs) > 0 {
 				deps["scorecards"] = scs
 			}
@@ -1055,7 +1782,7 @@ func main() {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		rdb.Set(ctx, key, data, cfg.Cache.TTL)
+		cache.set(ctx, key, data, cfg.Cache.TTL)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache-Status", "MISS")
 		w.Write(data)
@@ -1064,9 +1791,21 @@ func main() {
 	// route without namespace
 	r.HandleFunc("/api/dependencies/{manager}/{name}/{version}", func(w http.ResponseWriter, req *http.Request) {
 		vars := mux.Vars(req)
-		pm := vars["manager"]
-		name := vars["name"]
-		version := vars["version"]
+		pm, err := pathVar(vars, "manager")
+		if err != nil {
+			http.Error(w, "invalid package manager", http.StatusBadRequest)
+			return
+		}
+		name, err := pathVar(vars, "name")
+		if err != nil {
+			http.Error(w, "invalid package name", http.StatusBadRequest)
+			return
+		}
+		version, err := pathVar(vars, "version")
+		if err != nil {
+			http.Error(w, "invalid version", http.StatusBadRequest)
+			return
+		}
 
 		if err := validateName(name); err != nil {
 			http.Error(w, "invalid package name", http.StatusBadRequest)
@@ -1084,14 +1823,14 @@ func main() {
 		reqScore := queryBool(req, "scorecard", withScorecard)
 		key := cacheKey(pm, "", name, version, reqRecurse, reqVuln, reqScore)
 		ctx := req.Context()
-		if cached, err := rdb.Get(ctx, key).Result(); err == nil {
+		if cached, ok := cache.get(ctx, key); ok {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Cache-Status", "HIT")
 			w.Write([]byte(cached))
 			return
 		}
 
-		deps, _, errs, err := fetchAllDeps(ctx, m, "", name, version, reqRecurse, map[string]struct{}{}, "", pm, rdb, cfg.Cache.TTL)
+		deps, _, errs, err := fetchAllDeps(ctx, m, "", name, version, reqRecurse, map[string]struct{}{}, "", pm, cache, cfg.Cache.TTL)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -1103,15 +1842,18 @@ func main() {
 		if reqVuln {
 			depMap, _ := deps["dependencies"].(map[string]interface{})
 
-			vulns := collectVulnerabilities(ctx, pm, "", name, version, depMap, rdb, cfg.Cache.TTL)
-			if len(vulns) > 0 {
-				deps["vulnerabilities"] = vulns
+			vulns := collectVulnerabilities(ctx, pm, "", name, version, depMap, cache, cfg.Cache.TTL)
+			if len(vulns.Vulnerabilities) > 0 {
+				deps["vulnerabilities"] = vulns.Vulnerabilities
+			}
+			if len(vulns.Status) > 0 {
+				deps["vulnerability_status"] = vulns.Status
 			}
 		}
 		if reqScore {
 			depMap, _ := deps["dependencies"].(map[string]interface{})
 			repoMap, _ := deps["repositories"].(map[string]string)
-			scs := collectScorecards(ctx, pm, "", name, depMap, repoMap, rdb, cfg.Cache.TTL)
+			scs := collectScorecards(ctx, pm, "", name, depMap, repoMap, cache, cfg.Cache.TTL)
 			if len(scs) > 0 {
 				deps["scorecards"] = scs
 			}
@@ -1121,7 +1863,7 @@ func main() {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		rdb.Set(ctx, key, data, cfg.Cache.TTL)
+		cache.set(ctx, key, data, cfg.Cache.TTL)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache-Status", "MISS")
 		w.Write(data)

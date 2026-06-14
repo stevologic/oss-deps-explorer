@@ -1,6 +1,6 @@
 # oss-deps-explorer
 
-`oss-deps-explorer` is a lightweight web application that exposes a REST API and optional browser UI for exploring package dependencies. The service proxies multiple package ecosystems and returns the dependency graph for a requested package. Dependency data is fetched from the [deps.dev](https://deps.dev) API and cached in Redis for 24 hours.
+`oss-deps-explorer` is a lightweight web application that exposes a REST API and optional browser UI for exploring package dependencies. The service proxies multiple package ecosystems and returns dependencies for a requested package. Dependency data is fetched from the stable [deps.dev](https://deps.dev) v3 API for npm, PyPI, Go, Maven, Cargo, RubyGems, and NuGet, and from Packagist for Composer. Responses are cached in Redis for 24 hours when Redis is available.
 
 
 
@@ -11,7 +11,7 @@
 
 ## Architecture
 
-At startup the service registers an implementation for each supported package manager. Each implementation conforms to a simple `Manager` interface which fetches dependency data from the deps.dev API. Requests are served by a Go HTTP server using Gorilla Mux. Dependency graphs are cached in Redis according to the `cache.ttl` setting. An optional web front-end consumes the same API to visualize dependencies in the browser.
+At startup the service registers an implementation for each supported package manager. Each implementation conforms to a simple `Manager` interface. Requests are served by a Go HTTP server using Gorilla Mux. Dependency graphs are cached in Redis according to the `cache.ttl` setting when Redis is reachable; otherwise the service continues without cache. An optional web front-end consumes the same API to visualize dependencies in the browser.
 
 Optional features include:
 
@@ -19,11 +19,11 @@ Optional features include:
 * Vulnerability lookups from [OSV.dev](https://osv.dev) via the `-vuln` flag.
 * Repository health details from OpenSSF Scorecard with `-scorecard`.
 * Repository URLs cached alongside dependency data for faster Scorecard lookups.
-* GraphViz visual output when `-graph` is supplied (for `/purl` requests).
+* GraphViz visual output when `-graph` is supplied or `graph=true` is passed for `/api/purl` requests.
 
 Dependencies can also be fetched using a [package URL](https://github.com/package-url/purl-spec) via the `/api/purl/{purl}` endpoint.
 
-Deps.dev API base URLs are exposed via `/api/config` and package name suggestions (currently npm only) can be requested from `/api/suggest/{manager}/{query}`.
+Deps.dev API base URLs are exposed via `/api/config`. Package name suggestions can be requested from `/api/suggest/{manager}/{query}`, and version suggestions can be requested from `/api/versions?manager=<manager>&name=<name>[&namespace=<ns>]` for every package manager in the UI.
 ### Supported package managers
 
 | Manager | Path component mapping | Notes |
@@ -36,6 +36,8 @@ Deps.dev API base URLs are exposed via `/api/config` and package name suggestion
 | `rubygems` | name = gem | Namespace is ignored |
 | `nuget` | name = package ID | Namespace is ignored |
 | `composer` | namespace = vendor, name = package | Uses Packagist API |
+
+For npm, PyPI, Maven, and Cargo, deps.dev provides resolved dependency graph data. For Go, RubyGems, and NuGet, the service uses the current deps.dev requirements endpoint and returns direct requirements. Composer uses Packagist metadata and resolves common Composer version constraints on a best-effort basis for recursive lookups.
 
 ## Configuration
 
@@ -53,14 +55,14 @@ cache:
 proxy:
   url: ""
 package_manager:
-  npm: "https://api.deps.dev"
-  pypi: "https://api.deps.dev"
-  go: "https://api.deps.dev"
-  maven: "https://api.deps.dev"
-  cargo: "https://api.deps.dev"
-  rubygems: "https://api.deps.dev"
-  nuget: "https://api.deps.dev"
-  composer: "https://api.deps.dev"
+  npm: "https://api.deps.dev/v3"
+  pypi: "https://api.deps.dev/v3"
+  go: "https://api.deps.dev/v3"
+  maven: "https://api.deps.dev/v3"
+  cargo: "https://api.deps.dev/v3"
+  rubygems: "https://api.deps.dev/v3"
+  nuget: "https://api.deps.dev/v3"
+  composer: "https://repo.packagist.org"
 ```
 
 ## Running locally
@@ -168,6 +170,7 @@ GET /api/dependencies/{manager}/{name}/{version}
 GET /api/purl/{purl}
 GET /api/config
 GET /api/suggest/{manager}/{query}
+GET /api/versions?manager=<manager>&name=<name>[&namespace=<ns>]
 GET /api/repo/{repo}
 
 GET /api/lookup?manager=<manager>&name=<name>&version=<version>[&namespace=<ns>][&recursive=true][&vuln=true][&scorecard=true]
@@ -210,7 +213,7 @@ OSV.dev vulnerability information for the resolved packages. When the `-scorecar
 flag is used, a `scorecards` object provides OpenSSF Scorecard results for any
 packages backed by a GitHub repository.
 
-The `/lookup` endpoint exposes the same functionality using query parameters instead of path segments and skips Redis caching.
+The `/lookup` endpoint exposes the same functionality using query parameters instead of path segments.
 
 Example:
 
@@ -332,7 +335,13 @@ If the API returns `package not found` for a version that you believe exists,
 verify that the version is present in the deps.dev dataset:
 
 ```bash
-curl https://api.deps.dev/systems/<manager>/packages/<package>/versions/<ver>:dependencies
+curl https://api.deps.dev/v3/systems/<manager>/packages/<package>/versions/<ver>:dependencies
+```
+
+For Go, RubyGems, and NuGet, check the deps.dev requirements endpoint instead:
+
+```bash
+curl https://api.deps.dev/v3/systems/<manager>/packages/<package>/versions/<ver>:requirements
 ```
 
 If this request fails or returns `403 Forbidden`, your environment may block
