@@ -112,6 +112,64 @@ func TestSplitDep(t *testing.T) {
 	}
 }
 
+func TestParseGitHubRepository(t *testing.T) {
+	cases := []struct {
+		in    string
+		owner string
+		repo  string
+		slug  string
+	}{
+		{"https://github.com/axios/axios", "axios", "axios", "axios/axios"},
+		{"github.com/facebook/react.git", "facebook", "react", "facebook/react"},
+		{"git@github.com:vuejs/core.git", "vuejs", "core", "vuejs/core"},
+		{"owner/repo/tree/main", "owner", "repo", "owner/repo"},
+	}
+	for _, c := range cases {
+		owner, repo, slug, err := parseGitHubRepository(c.in)
+		if err != nil {
+			t.Fatalf("parseGitHubRepository(%q) unexpected error: %v", c.in, err)
+		}
+		if owner != c.owner || repo != c.repo || slug != c.slug {
+			t.Fatalf("parseGitHubRepository(%q)=(%q,%q,%q), want (%q,%q,%q)", c.in, owner, repo, slug, c.owner, c.repo, c.slug)
+		}
+	}
+	if _, _, _, err := parseGitHubRepository("https://example.com/owner/repo"); err == nil {
+		t.Fatal("expected non-GitHub URL to fail")
+	}
+}
+
+func TestGitHubDependencyPackageFromPURL(t *testing.T) {
+	cases := []struct {
+		purl      string
+		manager   string
+		namespace string
+		name      string
+		version   string
+		display   string
+	}{
+		{"pkg:npm/%40angular/core@18.0.0", "npm", "@angular", "core", "18.0.0", "@angular/core"},
+		{"pkg:maven/org.apache.logging.log4j/log4j-core@2.17.1", "maven", "org.apache.logging.log4j", "log4j-core", "2.17.1", "org.apache.logging.log4j:log4j-core"},
+		{"pkg:golang/github.com/gin-gonic/gin@v1.10.0", "go", "github.com/gin-gonic", "gin", "v1.10.0", "github.com/gin-gonic/gin"},
+		{"pkg:nuget/Newtonsoft.Json@13.0.3", "nuget", "", "Newtonsoft.Json", "13.0.3", "Newtonsoft.Json"},
+	}
+	for _, c := range cases {
+		dep, ok := githubDependencyPackageFromPURL(c.purl, "", "", "SPDXRef-Package")
+		if !ok {
+			t.Fatalf("githubDependencyPackageFromPURL(%q) unsupported", c.purl)
+		}
+		if dep.Manager != c.manager ||
+			dep.Namespace != c.namespace ||
+			dep.Name != c.name ||
+			dep.Version != c.version ||
+			dep.Display != c.display {
+			t.Fatalf("githubDependencyPackageFromPURL(%q)=%+v, want manager=%q namespace=%q name=%q version=%q display=%q", c.purl, dep, c.manager, c.namespace, c.name, c.version, c.display)
+		}
+	}
+	if _, ok := githubDependencyPackageFromPURL("pkg:github/owner/repo@v1", "", "", ""); ok {
+		t.Fatal("github purl should not be presented as analyzable package")
+	}
+}
+
 func TestQueryBool(t *testing.T) {
 	req := &http.Request{URL: &url.URL{}}
 	if queryBool(req, "x", true) != true {

@@ -24,6 +24,7 @@
   --z-palette-box: 410;
   --z-typeahead: 450;
   --z-alert: 500;
+  --z-dialog: 900;
   --z-loading: 1000;
   --page-gutter: clamp(16px, 2.5vw, 36px);
   --panel-padding: clamp(12px, 1.4vw, 16px);
@@ -47,10 +48,6 @@ body {
   padding: 0 var(--page-gutter) 72px;
   background: radial-gradient(circle at center top, rgba(67, 99, 117, 0.842), var(--background-default) 75%);
   color: var(--text-color);
-  overflow-y: hidden;
-}
-
-body.show-scroll {
   overflow-y: auto;
 }
 
@@ -136,7 +133,7 @@ form {
   background: var(--header-bg);
   border-bottom: 1px solid var(--border-color);
   text-align: left;
-  padding: 12px 24px;
+  padding: 12px 140px 12px 24px;
   width: 100%;
   box-sizing: border-box;
   position: fixed;
@@ -300,6 +297,26 @@ form {
   gap: 4px;
   margin-left: auto;
   width: auto;
+}
+
+.share-link-button {
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  background: var(--background-paper);
+  color: var(--primary-color);
+  font-size: 0.76rem;
+  line-height: 1.2;
+  text-decoration: none;
+}
+
+.share-link-button:hover,
+.share-link-button:focus {
+  background: var(--border-color);
+  color: var(--primary-color);
 }
 
 .badge-row {
@@ -677,6 +694,168 @@ select:focus {
   background: rgba(0, 229, 255, 0.14);
 }
 
+.github-import {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(100%, 980px);
+  margin-top: 10px;
+}
+
+.github-import-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.github-import-row input,
+.github-package-filter {
+  width: 100%;
+}
+
+.repo-import-button {
+  min-width: 116px;
+  background: var(--background-paper);
+  color: var(--primary-color);
+  border: 1px solid var(--border-color);
+}
+
+.repo-import-button:hover,
+.repo-import-button:focus {
+  background: var(--border-color);
+  color: var(--primary-color);
+}
+
+.repo-import-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.github-import-error {
+  border: 1px solid var(--error-color);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--error-color);
+  background: rgba(255, 82, 82, 0.08);
+  overflow-wrap: anywhere;
+}
+
+.github-import-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(22, 27, 34, 0.82);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28);
+}
+
+.github-import-summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  min-width: 0;
+  font-size: 0.86rem;
+}
+
+.github-import-summary strong {
+  color: var(--primary-color);
+  overflow-wrap: anywhere;
+}
+
+.github-import-stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.github-import-stats span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--background-paper);
+  color: var(--text-color);
+  font-size: 0.72rem;
+  line-height: 1.2;
+}
+
+.github-package-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+  max-height: 286px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.github-package-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  height: auto;
+  min-height: 52px;
+  padding: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--background-paper);
+  color: var(--text-color);
+  text-align: left;
+}
+
+.github-package-card:hover,
+.github-package-card:focus {
+  background: rgba(0, 229, 255, 0.12);
+  color: var(--primary-color);
+  border-color: var(--primary-color);
+}
+
+.github-package-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.github-package-name {
+  font-weight: 700;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.github-package-version {
+  color: var(--neutral-color);
+  font-size: 0.76rem;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.github-package-manager {
+  flex: 0 0 auto;
+  max-width: 96px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 2px 5px;
+  color: var(--primary-color);
+  font-size: 0.68rem;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.github-import-more,
+.github-import-empty {
+  color: var(--neutral-color);
+  font-size: 0.78rem;
+}
+
 .typeahead-name {
   min-width: 0;
   overflow-wrap: anywhere;
@@ -915,6 +1094,22 @@ li.transitive {
   border-radius: 4px;
   color: var(--neutral-color);
   font-size: 0.68rem;
+  line-height: 1;
+}
+
+.dep-risk-score {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  min-height: 18px;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: rgba(13, 17, 23, 0.72);
+  font-size: 0.68rem;
+  font-weight: 700;
   line-height: 1;
 }
 
@@ -1217,23 +1412,6 @@ li.transitive {
   pointer-events: none !important;
 }
 
-#quote-overlay {
-  position: fixed;
-  top: 40%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  color: #fff;
-  font-family: 'Playfair Display', serif;
-  font-size: 1.5rem;
-  text-align: center;
-  padding: 20px;
-  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
-  z-index: var(--z-overlay);
-  white-space: pre-wrap;
-  opacity: 0;
-  transition: opacity 4s ease-in-out;
-  pointer-events: none;
-}
 
 .loading-overlay {
   position: fixed;
@@ -1377,36 +1555,48 @@ li.transitive {
 .advisory-descriptions {
   display: grid;
   gap: 5px;
-  width: 100%;
+  width: calc(100% - 20px);
+  max-width: calc(100% - 20px);
   margin: 6px 0 2px 20px;
   padding: 0;
   list-style: none;
   color: var(--text-color);
   font-size: 0.78rem;
   line-height: 1.35;
+  box-sizing: border-box;
 }
 
 .advisory-descriptions li {
   display: grid;
-  grid-template-columns: minmax(90px, max-content) minmax(0, 1fr);
+  grid-template-columns: minmax(118px, 34%) minmax(0, 1fr);
+  align-items: start;
   gap: 8px;
   max-width: 100%;
+  min-width: 0;
   padding: 6px 8px;
   border: 1px solid var(--border-color);
   border-radius: 6px;
   background: rgba(22, 27, 34, 0.65);
+  box-sizing: border-box;
 }
 
 .advisory-description-ids {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
   color: var(--warning-color);
   font-weight: 700;
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .advisory-description-text {
+  display: block;
   min-width: 0;
+  max-width: 100%;
   color: var(--text-color);
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 
@@ -1487,6 +1677,76 @@ li.transitive {
   background: var(--background-paper);
   color: var(--primary-color);
   border: 1px solid var(--border-color);
+}
+
+.version-suggestions .version-suggestion-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  overflow: visible;
+}
+
+.version-suggestion-text {
+  line-height: 1;
+}
+
+.version-suggestion-btn.version-risk-medium,
+.version-suggestion-btn.version-risk-high,
+.version-suggestion-btn.version-risk-critical {
+  padding-right: 24px;
+  border-color: var(--risk-color);
+  box-shadow:
+    inset 0 -2px 0 var(--risk-color),
+    0 0 14px rgba(0, 0, 0, 0.18);
+}
+
+.version-suggestion-btn.version-risk-medium {
+  --risk-color: var(--warning-color);
+  background:
+    linear-gradient(180deg, rgba(255, 193, 7, 0.14), transparent 66%),
+    var(--background-paper);
+}
+
+.version-suggestion-btn.version-risk-high {
+  --risk-color: var(--error-color);
+  background:
+    linear-gradient(180deg, rgba(255, 82, 82, 0.14), transparent 66%),
+    var(--background-paper);
+}
+
+.version-suggestion-btn.version-risk-critical {
+  --risk-color: #ff1744;
+  font-weight: 700;
+  background:
+    linear-gradient(180deg, rgba(255, 23, 68, 0.2), transparent 66%),
+    var(--background-paper);
+}
+
+.version-risk-badge {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--risk-color);
+  color: #0d1117;
+  font-size: 0.58rem;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.18),
+    0 4px 10px rgba(0, 0, 0, 0.28);
+}
+
+.version-risk-critical .version-risk-badge,
+.version-risk-high .version-risk-badge {
+  color: #fff;
 }
 
 .version-suggestions button:hover {
@@ -1667,6 +1927,166 @@ a:hover {
   display: block;
 }
 
+.mcp-icon-button {
+  position: absolute;
+  top: 50%;
+  right: 100px;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  z-index: var(--z-palette-icon);
+}
+
+.mcp-icon-button:hover,
+.mcp-icon-button:focus {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--border-color);
+  opacity: 1;
+}
+
+.mcp-icon {
+  width: 20px;
+  height: 20px;
+  pointer-events: none;
+}
+
+.mcp-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-dialog);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 72px 20px 24px;
+  background: rgba(0, 0, 0, 0.62);
+  overflow-y: auto;
+}
+
+.mcp-dialog {
+  width: min(780px, calc(100vw - 32px));
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
+  background: var(--background-paper);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+  padding: 20px;
+}
+
+.mcp-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.mcp-dialog h3,
+.mcp-dialog h4,
+.mcp-dialog p {
+  margin: 0;
+}
+
+.mcp-dialog h3 {
+  font-size: 1.25rem;
+  line-height: 1.2;
+}
+
+.mcp-dialog h4 {
+  margin-top: 16px;
+  margin-bottom: 8px;
+  font-size: 0.92rem;
+}
+
+.mcp-eyebrow {
+  color: var(--primary-color);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.mcp-dialog-copy {
+  color: var(--muted-color);
+  line-height: 1.5;
+}
+
+.mcp-dialog-close {
+  flex: 0 0 auto;
+  min-height: 32px;
+  background: transparent;
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+}
+
+.mcp-dialog-close:hover,
+.mcp-dialog-close:focus {
+  background: var(--border-color);
+  color: var(--primary-color);
+}
+
+.mcp-command-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.mcp-command-block {
+  min-width: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.mcp-command-block span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted-color);
+  font-size: 0.76rem;
+}
+
+.mcp-command-block code,
+.mcp-code-block code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.mcp-code-block {
+  max-height: 240px;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--text-color);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.mcp-tool-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-color);
+  line-height: 1.45;
+}
+
 /* Palette icon and color selector */
 .palette-icon-container {
   position: absolute;
@@ -1809,6 +2229,7 @@ a:hover {
     flex-direction: column;
     gap: 16px;
   }
+
 }
 
 /* Mobile adjustments */
@@ -1839,8 +2260,8 @@ a:hover {
 
   .page-title {
     min-height: 48px;
-    padding: 10px 84px 10px 12px;
-    font-size: 1rem;
+    padding: 10px 124px 10px 12px;
+    font-size: 0.95rem;
     line-height: 1.2;
     font-family: 'Inter', 'Roboto', Arial, sans-serif;
     font-weight: 500;
@@ -1851,6 +2272,13 @@ a:hover {
     height: 20px;
     margin-right: 4px;
     flex: 0 0 auto;
+  }
+
+  .mcp-icon-button {
+    right: 84px;
+    width: 28px;
+    height: 28px;
+    min-height: 28px;
   }
 
   .palette-icon-container {
@@ -1873,6 +2301,29 @@ a:hover {
     right: 0;
     width: min(260px, calc(100vw - 24px));
     font-size: 0.75rem;
+  }
+
+  .mcp-dialog-backdrop {
+    padding: 60px 12px 16px;
+  }
+
+  .mcp-dialog {
+    width: 100%;
+    max-height: calc(100vh - 76px);
+    padding: 16px;
+  }
+
+  .mcp-dialog-header {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .mcp-dialog-close {
+    width: 100%;
+  }
+
+  .mcp-command-grid {
+    grid-template-columns: 1fr;
   }
 
   .form-wrapper {
@@ -1926,6 +2377,43 @@ a:hover {
     display: grid;
     grid-template-columns: 1fr;
     gap: 8px;
+  }
+
+  .github-import {
+    width: 100%;
+  }
+
+  .github-import-row {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .repo-import-button {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  .github-import-results {
+    padding: 10px;
+    border-radius: 6px;
+  }
+
+  .github-import-summary {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .github-import-stats {
+    justify-content: flex-start;
+  }
+
+  .github-package-grid {
+    grid-template-columns: 1fr;
+    max-height: 320px;
+  }
+
+  .github-package-card {
+    min-height: 58px;
   }
 
   .fetch-button,
@@ -2166,6 +2654,8 @@ a:hover {
 
   .advisory-descriptions {
     margin-left: 0;
+    width: 100%;
+    max-width: 100%;
     font-size: 0.82rem;
   }
 
@@ -2193,6 +2683,10 @@ a:hover {
     text-align: left;
     margin-left: 0;
     width: 100%;
+  }
+
+  .share-link-button {
+    align-self: flex-start;
   }
 
   .package-title {
@@ -2265,13 +2759,6 @@ a:hover {
 
   .repo-column br {
     display: none;
-  }
-
-  #quote-overlay {
-    width: min(90vw, 340px);
-    font-size: 1.05rem;
-    top: 48%;
-    padding: 0;
   }
 
   .loading-overlay {

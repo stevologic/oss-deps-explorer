@@ -88,6 +88,81 @@ go run ./cmd/repometa <owner>/<repo>
 The output includes description, license, open and closed pull requests,
 commit counts and other details.
 
+### MCP server for agent workflows
+
+The project includes a companion Model Context Protocol server for agents that
+need dependency intelligence without scraping the UI. The MCP server is a stdio
+process that calls the running `oss-deps-explorer` API, so agents use the same
+dependency parsing, OSV lookups, repository metadata, and Scorecard data as the
+web app.
+
+Start the API first:
+
+```bash
+docker-compose up --build api redis
+```
+
+Then run the MCP server:
+
+```bash
+go run ./cmd/oss-deps-mcp -api http://localhost:8080
+```
+
+You can also set the API URL with `OSS_DEPS_EXPLORER_API`:
+
+```bash
+OSS_DEPS_EXPLORER_API=http://localhost:8080 go run ./cmd/oss-deps-mcp
+```
+
+Build a standalone binary:
+
+```bash
+go build -o oss-deps-mcp ./cmd/oss-deps-mcp
+```
+
+Example MCP client configuration:
+
+```json
+{
+  "mcpServers": {
+    "oss-deps-explorer": {
+      "command": "go",
+      "args": [
+        "run",
+        "./cmd/oss-deps-mcp",
+        "-api",
+        "http://localhost:8080"
+      ],
+      "env": {
+        "OSS_DEPS_EXPLORER_API": "http://localhost:8080"
+      }
+    }
+  }
+}
+```
+
+The server exposes read-only tools:
+
+| Tool | Purpose |
+|------|---------|
+| `search_packages` | Search supported ecosystems before deeper analysis |
+| `research_dependencies` | Resolve direct/transitive dependencies, OSV status, parent paths, and optional Scorecard data |
+| `assess_package_reputation` | Summarize repository metadata and OpenSSF Scorecard reputation signals |
+| `plan_vulnerability_remediation` | Produce upgrade and override guidance from OSV advisories, fixed versions, and dependency paths |
+
+Example tool argument for transitive dependency research:
+
+```json
+{
+  "manager": "npm",
+  "name": "axios",
+  "version": "1.13.0",
+  "recursive": true,
+  "vulnerabilities": true,
+  "scorecard": true
+}
+```
+
 ### Running on Windows
 
 Build a Windows binary by setting the `GOOS` environment variable:

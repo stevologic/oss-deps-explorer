@@ -179,6 +179,52 @@ var purlMap = map[string]string{
 	"composer": "composer",
 }
 
+var purlTypeToManager = map[string]string{
+	"npm":      "npm",
+	"pypi":     "pypi",
+	"golang":   "go",
+	"maven":    "maven",
+	"cargo":    "cargo",
+	"gem":      "rubygems",
+	"nuget":    "nuget",
+	"composer": "composer",
+}
+
+type githubDependencyPackage struct {
+	Manager   string `json:"manager"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name"`
+	Version   string `json:"version,omitempty"`
+	PURL      string `json:"purl"`
+	SPDXID    string `json:"spdx_id,omitempty"`
+	Display   string `json:"display"`
+}
+
+type githubDependencyGraphResult struct {
+	Repository       string                    `json:"repository"`
+	Source           string                    `json:"source"`
+	PackageCount     int                       `json:"package_count"`
+	UnsupportedCount int                       `json:"unsupported_count"`
+	Packages         []githubDependencyPackage `json:"packages"`
+}
+
+type githubSBOMResponse struct {
+	SBOM struct {
+		Packages []struct {
+			Name             string `json:"name"`
+			SPDXID           string `json:"SPDXID"`
+			VersionInfo      string `json:"versionInfo"`
+			LicenseConcluded string `json:"licenseConcluded"`
+			LicenseDeclared  string `json:"licenseDeclared"`
+			ExternalRefs     []struct {
+				ReferenceCategory string `json:"referenceCategory"`
+				ReferenceType     string `json:"referenceType"`
+				ReferenceLocator  string `json:"referenceLocator"`
+			} `json:"externalRefs"`
+		} `json:"packages"`
+	} `json:"sbom"`
+}
+
 func fetchAllDeps(ctx context.Context, m manager.Manager, ns, name, version string, recursive bool, visited map[string]struct{}, parent string, pm string, cache *redisCache, ttl time.Duration) (map[string]interface{}, map[string][]string, []string, error) {
 
 	deps, repo, err := m.Dependencies(ctx, ns, name, version)
@@ -1038,6 +1084,184 @@ func splitPackageForManager(manager, pkg string) (string, string) {
 	return "", pkg
 }
 
+func parseGitHubRepository(raw string) (string, string, string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", "", "", fmt.Errorf("repository required")
+	}
+	trimmed = strings.TrimSuffix(trimmed, ".git")
+	trimmed = strings.TrimPrefix(trimmed, "git@github.com:")
+	trimmed = strings.TrimPrefix(trimmed, "github.com/")
+
+	if strings.Contains(trimmed, "://") {
+		u, err := url.Parse(trimmed)
+		if err != nil {
+			return "", "", "", fmt.Errorf("invalid GitHub repository URL")
+		}
+		host := strings.ToLower(u.Hostname())
+		if host != "github.com" && host != "www.github.com" {
+			return "", "", "", fmt.Errorf("repository must be hosted on github.com")
+		}
+		trimmed = strings.Trim(u.EscapedPath(), "/")
+		path, err := url.PathUnescape(trimmed)
+		if err != nil {
+			return "", "", "", fmt.Errorf("invalid GitHub repository path")
+		}
+		trimmed = path
+	}
+
+	parts := strings.Split(strings.Trim(trimmed, "/"), "/")
+	if len(parts) < 2 {
+		return "", "", "", fmt.Errorf("repository must include owner and name")
+	}
+	owner := strings.TrimSpace(parts[0])
+	repo := strings.TrimSuffix(strings.TrimSpace(parts[1]), ".git")
+	if owner == "" || repo == "" {
+		return "", "", "", fmt.Errorf("repository must include owner and name")
+	}
+	if err := validateName(owner); err != nil {
+		return "", "", "", fmt.Errorf("invalid GitHub owner")
+	}
+	if err := validateName(repo); err != nil {
+		return "", "", "", fmt.Errorf("invalid GitHub repository")
+	}
+	return owner, repo, owner + "/" + repo, nil
+}
+
+func cleanSPDXValue(value string) string {
+	value = strings.TrimSpace(value)
+	switch strings.ToUpper(value) {
+	case "", "NOASSERTION", "NONE":
+		return ""
+	default:
+		return value
+	}
+}
+
+func githubDependencyDisplayName(managerName, namespace, name string) string {
+	if namespace == "" {
+		return name
+	}
+	if managerName == "maven" {
+		return namespace + ":" + name
+	}
+	return namespace + "/" + name
+}
+
+func githubDependencyPackageFromPURL(locator, spdxName, spdxVersion, spdxID string) (githubDependencyPackage, bool) {
+	pu, err := purl.FromString(locator)
+	if err != nil {
+		return githubDependencyPackage{}, false
+	}
+	managerName, ok := purlTypeToManager[strings.ToLower(pu.Type)]
+	if !ok {
+		return githubDependencyPackage{}, false
+	}
+	name := strings.TrimSpace(pu.Name)
+	if name == "" {
+		name = strings.TrimSpace(spdxName)
+	}
+	if name == "" {
+		return githubDependencyPackage{}, false
+	}
+	version := cleanSPDXValue(pu.Version)
+	if version == "" {
+		version = cleanSPDXValue(spdxVersion)
+	}
+	dep := githubDependencyPackage{
+		Manager:   managerName,
+		Namespace: pu.Namespace,
+		Name:      name,
+		Version:   version,
+		PURL:      locator,
+		SPDXID:    spdxID,
+	}
+	dep.Display = githubDependencyDisplayName(dep.Manager, dep.Namespace, dep.Name)
+	return dep, true
+}
+
+func fetchGitHubDependencyGraph(ctx context.Context, repo string, cache *redisCache, ttl time.Duration) (githubDependencyGraphResult, error) {
+	owner, name, slug, err := parseGitHubRepository(repo)
+	if err != nil {
+		return githubDependencyGraphResult{}, err
+	}
+	key := "github-dependency-graph:" + slug
+	if val, ok := cache.get(ctx, key); ok {
+		var cached githubDependencyGraphResult
+		if json.Unmarshal([]byte(val), &cached) == nil {
+			return cached, nil
+		}
+	}
+
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/%s/dependency-graph/sbom", url.PathEscape(owner), url.PathEscape(name))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return githubDependencyGraphResult{}, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent", "oss-deps-explorer/1.0")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return githubDependencyGraphResult{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return githubDependencyGraphResult{}, fmt.Errorf("github dependency graph returned status %d", resp.StatusCode)
+	}
+
+	var sbom githubSBOMResponse
+	if err := json.NewDecoder(resp.Body).Decode(&sbom); err != nil {
+		return githubDependencyGraphResult{}, err
+	}
+
+	result := githubDependencyGraphResult{
+		Repository: slug,
+		Source:     "github_dependency_graph_sbom",
+		Packages:   []githubDependencyPackage{},
+	}
+	seen := map[string]struct{}{}
+	for _, pkg := range sbom.SBOM.Packages {
+		foundSupported := false
+		for _, ref := range pkg.ExternalRefs {
+			if !strings.EqualFold(ref.ReferenceType, "purl") && !strings.HasPrefix(ref.ReferenceLocator, "pkg:") {
+				continue
+			}
+			dep, ok := githubDependencyPackageFromPURL(ref.ReferenceLocator, pkg.Name, pkg.VersionInfo, pkg.SPDXID)
+			if !ok {
+				continue
+			}
+			foundSupported = true
+			key := strings.Join([]string{dep.Manager, dep.Namespace, dep.Name, dep.Version}, "\x00")
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			result.Packages = append(result.Packages, dep)
+		}
+		if !foundSupported {
+			result.UnsupportedCount++
+		}
+	}
+	sort.Slice(result.Packages, func(i, j int) bool {
+		a := result.Packages[i]
+		b := result.Packages[j]
+		if a.Manager != b.Manager {
+			return a.Manager < b.Manager
+		}
+		if a.Display != b.Display {
+			return strings.ToLower(a.Display) < strings.ToLower(b.Display)
+		}
+		return a.Version > b.Version
+	})
+	result.PackageCount = len(result.Packages)
+
+	if data, err := json.Marshal(result); err == nil {
+		cache.set(ctx, key, data, ttl)
+	}
+	return result, nil
+}
+
 func escapePathSegments(path string) string {
 	parts := strings.Split(path, "/")
 	for i, part := range parts {
@@ -1439,6 +1663,27 @@ func main() {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(meta)
+	}).Methods(http.MethodGet)
+
+	r.HandleFunc("/api/github/dependencies", func(w http.ResponseWriter, req *http.Request) {
+		repo := req.URL.Query().Get("repo")
+		if repo == "" {
+			http.Error(w, "repo required", http.StatusBadRequest)
+			return
+		}
+		result, err := fetchGitHubDependencyGraph(req.Context(), repo, cache, cfg.Cache.TTL)
+		if err != nil {
+			status := http.StatusInternalServerError
+			if strings.Contains(err.Error(), "required") ||
+				strings.Contains(err.Error(), "invalid") ||
+				strings.Contains(err.Error(), "github.com") {
+				status = http.StatusBadRequest
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(result)
 	}).Methods(http.MethodGet)
 
 	// generic lookup endpoint using query parameters
