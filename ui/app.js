@@ -321,30 +321,21 @@ function App() {
   const [dependencyListFilter, setDependencyListFilter] = React.useState("all");
   const [consoleLines, setConsoleLines] = React.useState([]);
   const [showConsole, setShowConsole] = React.useState(false);
-  const [showPalette, setShowPalette] = React.useState(false);
+  const consoleBoxRef = React.useRef(null);
   const [showMcpInfo, setShowMcpInfo] = React.useState(false);
-  const paletteRef = React.useRef(null);
-  const MIN_BRIGHTNESS = 10;
-  const [bgSettings, setBgSettings] = React.useState(() => {
-    const v = localStorage.getItem("bgSettings");
-    const defaults = {
-      r: 0,
-      g: 0,
-      b: 30,
-      opacity: 0.65,
-      brightness: 100,
-      elementOpacity: 1,
-    };
-    const parsed = v ? { ...defaults, ...JSON.parse(v) } : defaults;
-    if (parsed.brightness < MIN_BRIGHTNESS) parsed.brightness = MIN_BRIGHTNESS;
-    if (parsed.elementOpacity > 1) parsed.elementOpacity = 1;
-    if (parsed.elementOpacity < 0.9) parsed.elementOpacity = 0.9;
-    return parsed;
+  const [appearanceMode, setAppearanceMode] = React.useState(() => {
+    const stored = localStorage.getItem("appearanceMode");
+    if (stored === "dark" || stored === "light") return stored;
+    return window.matchMedia &&
+      window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark"
+      : "light";
   });
   const nodesRef = React.useRef(null);
   const labelsRef = React.useRef(null);
   const centeredRef = React.useRef(false);
   const graphSizeRef = React.useRef({ width: 0, height: 0 });
+  const repoGraphRef = React.useRef(null);
   const [graphResizeKey, setGraphResizeKey] = React.useState(0);
   const uniqueFormName = React.useMemo(() => `form-${Date.now()}`, []);
   const abortRef = React.useRef({ controller: null, timer: null });
@@ -369,6 +360,26 @@ function App() {
   const [githubRepoResult, setGithubRepoResult] = React.useState(null);
   const [githubRepoError, setGithubRepoError] = React.useState("");
   const [githubRepoFilter, setGithubRepoFilter] = React.useState("");
+  const [githubRepoStatusFilter, setGithubRepoStatusFilter] =
+    React.useState("all");
+  const [githubRepoVulnStatus, setGithubRepoVulnStatus] = React.useState({});
+  const [githubRepoVulnLoading, setGithubRepoVulnLoading] =
+    React.useState(false);
+  const [githubRepoVulnProgress, setGithubRepoVulnProgress] =
+    React.useState("");
+  const [selectedGithubRepoPackage, setSelectedGithubRepoPackage] =
+    React.useState(null);
+  const [githubRepoGraphExpanded, setGithubRepoGraphExpanded] =
+    React.useState(false);
+  const [githubRepoTransitiveDeps, setGithubRepoTransitiveDeps] =
+    React.useState({});
+  const [githubRepoTransitiveLoading, setGithubRepoTransitiveLoading] =
+    React.useState(false);
+  const [githubRepoTransitiveProgress, setGithubRepoTransitiveProgress] =
+    React.useState("");
+  const [githubRepoTransitiveError, setGithubRepoTransitiveError] =
+    React.useState("");
+  const githubRepoTransitiveAbortRef = React.useRef(null);
   const [cveQuery, setCveQuery] = React.useState(
     initialCveDeepLink?.id || "",
   );
@@ -377,6 +388,7 @@ function App() {
   const [cveError, setCveError] = React.useState("");
   const [cveSubmitted, setCveSubmitted] = React.useState(false);
   const showResults = formSubmitted && !loading;
+  const showPackageResults = searchMode === "package" && showResults;
   const includeVuln = true;
   const includeScorecard = true;
   const showVersionSuggestions =
@@ -402,49 +414,38 @@ function App() {
     return fetch(url, opts);
   };
 
-  React.useEffect(() => {
-    const el = document.querySelector(".console-box");
-    if (el) {
+  React.useLayoutEffect(() => {
+    if (!showConsole) return undefined;
+    const el = consoleBoxRef.current;
+    if (!el) return undefined;
+    const scrollToEnd = () => {
       el.scrollTop = el.scrollHeight;
-    }
-  }, [consoleLines]);
-
-  React.useEffect(() => {
-    const { r, g, b, opacity, brightness, elementOpacity } = bgSettings;
-    const factor = Math.max(brightness, MIN_BRIGHTNESS) / 100;
-    const adjust = (value) => {
-      const v =
-        factor >= 1
-          ? value + (255 - value) * (factor - 1)
-          : value * factor;
-      return Math.round(v > 255 ? 255 : v);
     };
-    const adjustedR = adjust(r);
-    const adjustedG = adjust(g);
-    const adjustedB = adjust(b);
-    document.body.style.backgroundColor = `rgba(${adjustedR},${adjustedG},${adjustedB},${opacity})`;
-    document.body.style.filter = "";
-    document.documentElement.style.setProperty(
-      "--element-opacity",
-      elementOpacity.toString()
-    );
-  }, [bgSettings]);
-
-
-  const saveBgSettings = React.useCallback(() => {
-    localStorage.setItem("bgSettings", JSON.stringify(bgSettings));
-  }, [bgSettings]);
+    scrollToEnd();
+    const frame = window.requestAnimationFrame(scrollToEnd);
+    return () => window.cancelAnimationFrame(frame);
+  }, [consoleLines, showConsole]);
 
   React.useEffect(() => {
-    if (!showPalette) return;
-    const handleClick = (ev) => {
-      if (paletteRef.current && !paletteRef.current.contains(ev.target)) {
-        setShowPalette(false);
+    document.documentElement.dataset.theme = appearanceMode;
+    localStorage.setItem("appearanceMode", appearanceMode);
+  }, [appearanceMode]);
+
+  React.useEffect(() => {
+    if (!githubRepoGraphExpanded) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setGithubRepoGraphExpanded(false);
       }
     };
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [showPalette]);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [githubRepoGraphExpanded]);
 
   const toggleCve = (key) => {
     setExpanded((prev) => ({
@@ -1234,6 +1235,33 @@ function App() {
     return "var(--success-color)";
   };
 
+  const graphNeutralLabelColor = () =>
+    appearanceMode === "dark" ? "#c9d1d9" : "#334155";
+
+  const graphSearchLabelColor = () =>
+    appearanceMode === "dark" ? "#f87171" : "#b42318";
+
+  const graphLabelHaloColor = () =>
+    appearanceMode === "dark"
+      ? "rgba(2, 6, 12, 0.76)"
+      : "rgba(255, 255, 255, 0.96)";
+
+  const graphLabelShadowColor = () =>
+    appearanceMode === "dark" ? "#02060c" : "#475467";
+
+  const graphLabelShadowOpacity = () =>
+    appearanceMode === "dark" ? 0.42 : 0.14;
+
+  const graphLabelStrokeWidth = (compact = false) =>
+    compact ? 2.8 : appearanceMode === "dark" ? 3 : 3.6;
+
+  const graphBaseLabelColor = (d) => {
+    if (includeVuln && (d.risk || isUnresolvedOsvStatus(d.osvStatus))) {
+      return resolveColor(getNodeColor(d));
+    }
+    return graphNeutralLabelColor();
+  };
+
   React.useEffect(() => {
     if (!nodesRef.current || !labelsRef.current) return;
     const term = search.toLowerCase();
@@ -1248,13 +1276,18 @@ function App() {
       .attr("stroke-width", (d) =>
         term && d.id.toLowerCase().includes(term) ? 3 : 1.5,
       );
-    labelsRef.current.attr("fill", (d) =>
-      term && d.id.toLowerCase().includes(term) ? "#f00" : "#c9d1d9",
-    ).style("display", (d) => {
-      const matches = term && d.id.toLowerCase().includes(term);
-      return matches || d.labelBaseVisible ? null : "none";
-    });
-  }, [search]);
+    labelsRef.current
+      .attr("fill", (d) =>
+        term && d.id.toLowerCase().includes(term)
+          ? graphSearchLabelColor()
+          : graphBaseLabelColor(d),
+      )
+      .attr("stroke", graphLabelHaloColor())
+      .style("display", (d) => {
+        const matches = term && d.id.toLowerCase().includes(term);
+        return matches || d.labelBaseVisible ? null : "none";
+      });
+  }, [search, appearanceMode, includeVuln]);
 
   React.useEffect(() => {
     if (!name || version) {
@@ -1322,7 +1355,11 @@ function App() {
             setNameSuggestions(suggestions);
           }
         })
-        .catch((err) => console.error("suggest failed", err));
+        .catch((err) =>
+          addConsoleLines(
+            `! Suggest failed: ${err && err.message ? err.message : err}`,
+          ),
+        );
     }, 500);
     return () => {
       cancelled = true;
@@ -1415,7 +1452,7 @@ function App() {
   }, [loading, statusMessages]);
 
   React.useEffect(() => {
-    if (!showResults) return;
+    if (!showPackageResults) return;
     const graphEl = document.getElementById("graph");
     if (!graphEl) return;
 
@@ -1460,10 +1497,10 @@ function App() {
         window.removeEventListener("resize", scheduleResize);
       }
     };
-  }, [showResults]);
+  }, [showPackageResults]);
 
   React.useEffect(() => {
-    if (!showResults) return;
+    if (!showPackageResults) return;
     const direct = {};
     deps.forEach((d) => {
       if (!d.transitive) direct[d.name] = d.version;
@@ -1477,7 +1514,7 @@ function App() {
     const rootOsvStatus = vulnerabilityStatus[rootKey] || null;
     buildGraph(deps, rootKey || submittedName, submittedVersion, direct, rootRisk, rootOsvStatus);
   }, [
-    showResults,
+    showPackageResults,
     deps,
     submittedName,
     submittedVersion,
@@ -1485,6 +1522,7 @@ function App() {
     submittedManager,
     rootScore,
     includeVuln,
+    appearanceMode,
     vulnerabilityStatus,
     graphResizeKey,
   ]);
@@ -1586,6 +1624,18 @@ function App() {
   const githubPackageLabel = (pkg) =>
     pkg.display || packageDisplayName(pkg, pkg.manager);
 
+  const githubRepoPackageKey = (pkg) =>
+    [
+      pkg?.purl,
+      pkg?.spdx_id,
+      pkg?.manager,
+      pkg?.namespace,
+      pkg?.name,
+      pkg?.version,
+    ]
+      .filter(Boolean)
+      .join("|");
+
   const githubPackageSearchText = (pkg) =>
     [
       githubPackageLabel(pkg),
@@ -1593,6 +1643,7 @@ function App() {
       pkg.manager,
       pmDisplayNames[pkg.manager],
       pkg.purl,
+      pkg.spdx_id,
     ]
       .filter(Boolean)
       .join(" ")
@@ -1647,7 +1698,9 @@ function App() {
       }
       return data;
     } catch (err) {
-      console.error("version lookup failed", err);
+      addConsoleLines(
+        `! Version lookup failed: ${err && err.message ? err.message : err}`,
+      );
       return null;
     }
   };
@@ -1735,7 +1788,9 @@ function App() {
         },
       };
     } catch (err) {
-      console.error("osv query failed", err);
+      addConsoleLines(
+        `! OSV query failed: ${err && err.message ? err.message : err}`,
+      );
       return {
         vulns: [],
         status: {
@@ -1786,6 +1841,379 @@ function App() {
     return versions;
   };
 
+  const preferredAffectedVersion = (affected) => {
+    const fixed = affectedFixedVersions(affected);
+    if (fixed.length > 0) return fixed[0];
+    const listed = Array.isArray(affected?.versions) ? affected.versions : [];
+    return listed.length > 0 ? listed[listed.length - 1] : "";
+  };
+
+  const affectedVersionSummaries = (affected) => {
+    if (Array.isArray(affected?.database_specific?.version_ranges)) {
+      return affected.database_specific.version_ranges.filter(Boolean).slice(0, 4);
+    }
+    const fixed = affectedFixedVersions(affected);
+    if (fixed.length > 0) return fixed.slice(0, 4).map((ver) => `Fixed in ${ver}`);
+    const listed = Array.isArray(affected?.versions) ? affected.versions : [];
+    if (listed.length === 0) return ["No fixed version listed"];
+    return listed.slice(0, 4).map((ver) => `${ver} affected`);
+  };
+
+  const cleanAffectedVersionToken = (value) =>
+    String(value || "")
+      .trim()
+      .replace(/^[<>=~^\s]+/, "")
+      .replace(/[),.;:]+$/, "");
+
+  const versionFromAffectedSummary = (summary) => {
+    const text = String(summary || "").trim();
+    if (!text || /no fixed version listed/i.test(text)) return "";
+    const fixed = text.match(/^Fixed in\s+(.+)$/i);
+    if (fixed) return cleanAffectedVersionToken(fixed[1]);
+    const upperBound = text.match(/(?:<=|<)\s*([^\s,;]+)/);
+    if (upperBound) return cleanAffectedVersionToken(upperBound[1]);
+    const affected = text.match(/^(.+?)\s+affected$/i);
+    if (affected) return cleanAffectedVersionToken(affected[1]);
+    return "";
+  };
+
+  const remediationRecordDetails = (affected, idx) => {
+    const details = affectedPackageDetails(affected);
+    const display = affectedDisplayDetails(affected);
+    const fixedVersions = affectedFixedVersions(affected);
+    const versionSummaries = affectedVersionSummaries(affected);
+    const versionForLink = preferredAffectedVersion(affected);
+    const packageName = display.packageName || "Affected product";
+    const localLink = details
+      ? buildPackageDeepLink({
+          manager: details.manager,
+          namespace: details.namespace,
+          name: details.name,
+          version: versionForLink,
+        })
+      : "";
+    return {
+      key: `${packageName}-${display.managerLabel || display.ecosystem || "source"}-${idx}`,
+      affected,
+      details,
+      display,
+      fixedVersions,
+      versionSummaries,
+      versionForLink,
+      packageName,
+      localLink,
+      hasFix: fixedVersions.length > 0,
+    };
+  };
+
+  const affectedHasSupportedPackage = (affected) =>
+    Boolean(affectedPackageDetails(affected));
+
+  const affectedDisplayDetails = (affected) => {
+    const supported = affectedPackageDetails(affected);
+    if (supported) {
+      return {
+        ...supported,
+        repo: "",
+        collectionURL: "",
+        modules: [],
+        programFiles: [],
+      };
+    }
+    const pkg = affected?.package || {};
+    const meta = affected?.database_specific || {};
+    const label = meta.vendor || pkg.ecosystem || "NVD";
+    return {
+      manager: "",
+      managerLabel: label,
+      ecosystem: pkg.ecosystem || label,
+      packageName: pkg.name || meta.product || "Affected product",
+      namespace: "",
+      name: pkg.name || meta.product || "",
+      purl: pkg.purl || "",
+      product: meta.product || "",
+      repo: meta.repo || "",
+      collectionURL: meta.collectionURL || "",
+      modules: Array.isArray(meta.modules) ? meta.modules : [],
+      programFiles: Array.isArray(meta.programFiles) ? meta.programFiles : [],
+    };
+  };
+
+  const nvdCvssMetrics = (metrics = {}) => {
+    const groups = [
+      ["cvssMetricV40", "CVSS 4.0"],
+      ["cvssMetricV31", "CVSS 3.1"],
+      ["cvssMetricV30", "CVSS 3.0"],
+      ["cvssMetricV2", "CVSS 2.0"],
+    ];
+    const entries = [];
+    groups.forEach(([key, label]) => {
+      (metrics[key] || []).forEach((metric) => {
+        const data = metric.cvssData || {};
+        const score = Number(data.baseScore);
+        entries.push({
+          type: label,
+          score: Number.isFinite(score) ? score : data.baseScore || "",
+          severity: data.baseSeverity || metric.baseSeverity || "",
+          vector: data.vectorString || "",
+          source: metric.source || "",
+          role: metric.type || "",
+          exploitabilityScore: metric.exploitabilityScore,
+          impactScore: metric.impactScore,
+        });
+      });
+    });
+    return entries.sort(
+      (a, b) => (Number(b.score) || 0) - (Number(a.score) || 0),
+    );
+  };
+
+  const englishNvdDescription = (cve) => {
+    const descriptions = Array.isArray(cve?.descriptions) ? cve.descriptions : [];
+    return (
+      descriptions.find((desc) => desc.lang === "en")?.value ||
+      descriptions[0]?.value ||
+      ""
+    );
+  };
+
+  const nvdWeaknesses = (cve) =>
+    Array.from(
+      new Set(
+        (cve?.weaknesses || [])
+          .flatMap((weakness) => weakness.description || [])
+          .map((desc) => desc.value)
+          .filter(
+            (value) =>
+              value &&
+              !/^NVD-CWE-(?:noinfo|Other)$/i.test(String(value).trim()),
+          ),
+      ),
+    );
+
+  const nvdVersionRangeLabel = (version = {}) => {
+    const start = version.version || version.versionStartIncluding || "unknown";
+    const end =
+      version.lessThan ||
+      version.lessThanOrEqual ||
+      version.versionEndExcluding ||
+      version.versionEndIncluding ||
+      "";
+    if (end) {
+      const op =
+        version.lessThan || version.versionEndExcluding ? "<" : "<=";
+      return `${start} ${op} ${end}`;
+    }
+    return `${start} ${version.status || "affected"}`;
+  };
+
+  const nvdAffectedRecords = (cve) => {
+    const records = [];
+    (cve?.affected || []).forEach((sourceGroup) => {
+      (sourceGroup.affectedData || []).forEach((item) => {
+        const versions = Array.isArray(item.versions) ? item.versions : [];
+        const versionLabels = versions.map(nvdVersionRangeLabel);
+        const packageName = item.packageName || item.product || item.vendor;
+        records.push({
+          package: {
+            ecosystem: "NVD",
+            name: packageName || "Affected product",
+          },
+          versions: versionLabels,
+          ranges: versions.length
+            ? [
+                {
+                  type: item.versionType || "range",
+                  events: versions.flatMap((version) => {
+                    const events = [];
+                    if (version.version) events.push({ introduced: version.version });
+                    if (version.lessThan) events.push({ fixed: version.lessThan });
+                    if (version.lessThanOrEqual) {
+                      events.push({ last_affected: version.lessThanOrEqual });
+                    }
+                    return events;
+                  }),
+                },
+              ]
+            : [],
+          database_specific: {
+            source: sourceGroup.source || "",
+            vendor: item.vendor || "",
+            product: item.product || "",
+            defaultStatus: item.defaultStatus || "",
+            collectionURL: item.collectionURL || "",
+            repo: item.repo || "",
+            modules: item.modules || [],
+            programFiles: item.programFiles || [],
+            version_ranges: versionLabels,
+          },
+        });
+      });
+    });
+
+    (cve?.configurations || []).forEach((configuration) => {
+      (configuration.nodes || []).forEach((node) => {
+        (node.cpeMatch || [])
+          .filter((match) => match.vulnerable)
+          .forEach((match) => {
+            const parts = String(match.criteria || "").split(":");
+            const vendor = parts[3] || "";
+            const product = parts[4] || "";
+            const version = parts[5] || "";
+            const range = [
+              match.versionStartIncluding && `>= ${match.versionStartIncluding}`,
+              match.versionStartExcluding && `> ${match.versionStartExcluding}`,
+              match.versionEndIncluding && `<= ${match.versionEndIncluding}`,
+              match.versionEndExcluding && `< ${match.versionEndExcluding}`,
+            ].filter(Boolean);
+            records.push({
+              package: {
+                ecosystem: "CPE",
+                name: product || vendor || "Affected product",
+              },
+              versions: range.length ? range : version && version !== "*" ? [version] : [],
+              database_specific: {
+                source: "NVD CPE",
+                vendor,
+                product,
+                version_ranges:
+                  range.length ? [range.join(" ")] : version && version !== "*" ? [version] : [],
+              },
+            });
+          });
+      });
+    });
+
+    return records;
+  };
+
+  const nvdReferences = (cve) =>
+    (cve?.references || [])
+      .filter((ref) => ref && ref.url)
+      .map((ref) => ({
+        url: ref.url,
+        type: Array.isArray(ref.tags) && ref.tags.length ? ref.tags[0] : "REFERENCE",
+        source: ref.source || "",
+      }));
+
+  const transformNvdCve = (item, lookupNote = "") => {
+    const cve = item?.cve || item || {};
+    const metrics = nvdCvssMetrics(cve.metrics);
+    const primaryMetric = metrics[0] || {};
+    const weaknesses = nvdWeaknesses(cve);
+    return {
+      id: cve.id,
+      summary: cve.id,
+      details: englishNvdDescription(cve),
+      aliases: [],
+      affected: nvdAffectedRecords(cve),
+      references: nvdReferences(cve),
+      published: cve.published || "",
+      modified: cve.lastModified || "",
+      severity: metrics,
+      database_specific: {
+        source: "NVD",
+        severity: primaryMetric.severity || "",
+        status: cve.vulnStatus || "",
+        sourceIdentifier: cve.sourceIdentifier || "",
+        lookup_note: lookupNote,
+      },
+      weaknesses,
+    };
+  };
+
+  const fetchNvdCve = async (id, lookupNote = "") => {
+    if (!/^CVE-\d{4}-\d{4,}$/i.test(id)) return null;
+    const url = `https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=${encodeURIComponent(id)}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    let resp;
+    try {
+      resp = await fetch(url, {
+        headers: { Accept: "application/json" },
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (err && err.name === "AbortError") {
+        throw new Error("NVD lookup timed out. Try again or open the NVD link.");
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+    const text = await resp.text();
+    if (!resp.ok) {
+      throw new Error(text.trim() || `NVD lookup failed: ${resp.status}`);
+    }
+    const data = JSON.parse(text);
+    const item = Array.isArray(data.vulnerabilities)
+      ? data.vulnerabilities[0]
+      : null;
+    if (!item) return null;
+    return transformNvdCve(item, lookupNote);
+  };
+
+  const mergeNvdIntoAdvisory = (advisory, nvdAdvisory) => {
+    if (!nvdAdvisory) return advisory;
+    const affected = Array.isArray(advisory?.affected) ? advisory.affected : [];
+    const nvdAffected = Array.isArray(nvdAdvisory.affected)
+      ? nvdAdvisory.affected
+      : [];
+    const severity = Array.isArray(advisory?.severity) ? advisory.severity : [];
+    const references = Array.isArray(advisory?.references)
+      ? advisory.references
+      : [];
+    return {
+      ...advisory,
+      details: advisory.details || nvdAdvisory.details,
+      references: references.length ? references : nvdAdvisory.references,
+      affected: affected.length ? affected : nvdAffected,
+      severity: severity.length ? severity : nvdAdvisory.severity,
+      database_specific: {
+        ...(advisory.database_specific || {}),
+        nvd_status: nvdAdvisory.database_specific?.status || "",
+        nvd_source: nvdAdvisory.database_specific?.sourceIdentifier || "",
+      },
+      weaknesses: advisory.weaknesses || nvdAdvisory.weaknesses,
+    };
+  };
+
+  const mergeAliasAffectedPackages = async (advisory) => {
+    const affected = Array.isArray(advisory?.affected) ? advisory.affected : [];
+    if (affected.some(affectedHasSupportedPackage)) return advisory;
+    const aliases = Array.isArray(advisory?.aliases) ? advisory.aliases : [];
+    const aliasCandidates = aliases
+      .filter((alias) => alias && !/^CVE-/i.test(alias))
+      .slice(0, 5);
+    for (const alias of aliasCandidates) {
+      try {
+        const resp = await fetch(
+          `https://api.osv.dev/v1/vulns/${encodeURIComponent(alias)}`,
+        );
+        if (!resp.ok) continue;
+        const aliasData = await resp.json();
+        const aliasAffected = Array.isArray(aliasData.affected)
+          ? aliasData.affected
+          : [];
+        if (!aliasAffected.some(affectedHasSupportedPackage)) continue;
+        return {
+          ...advisory,
+          affected: aliasAffected,
+          aliases: Array.from(
+            new Set([...(advisory.aliases || []), aliasData.id].filter(Boolean)),
+          ),
+        };
+      } catch (err) {
+        addConsoleLines(
+          `! Alias lookup failed for ${alias}: ${
+            err && err.message ? err.message : err
+          }`,
+        );
+      }
+    }
+    return advisory;
+  };
+
   const currentCveDeepLink = () =>
     buildCveDeepLink((cveResult && cveResult.id) || cveQuery);
 
@@ -1799,15 +2227,16 @@ function App() {
     shareStatusTimerRef.current = setTimeout(() => setShareStatus(""), 1800);
   };
 
-  const analyzeAffectedPackage = (affected) => {
+  const analyzeAffectedPackage = (affected, forcedVersion = "") => {
     const details = affectedPackageDetails(affected);
     if (!details) return;
+    const versionForLookup = forcedVersion || preferredAffectedVersion(affected);
     suppressPackageSuggestionsBriefly();
     setSearchMode("package");
     setManager(details.manager);
     setNamespace(details.namespace);
     setName(details.name);
-    setVersion("");
+    setVersion(versionForLookup);
     setLatestVersions([]);
     setVersionRisk({});
     setVersionsToShow(5);
@@ -1818,7 +2247,7 @@ function App() {
     setCveSubmitted(false);
     fetchDeps(
       null,
-      null,
+      versionForLookup || null,
       details.namespace,
       details.name,
       details.manager,
@@ -1866,14 +2295,45 @@ function App() {
       );
       const text = await resp.text();
       if (!resp.ok) {
-        if (resp.status === 404) {
-          throw new Error(
-            `${id} was not found in OSV. Try the NVD link or confirm the CVE ID.`,
+        if (resp.status === 404 && /^CVE-/i.test(id)) {
+          const nvdData = await fetchNvdCve(
+            id,
+            "OSV does not have this advisory yet, so this view is populated from NVD.",
           );
+          if (nvdData) {
+            setCveResult(nvdData);
+            if (options.updateUrl !== false) updateCveDeepLink(nvdData.id || id);
+            return;
+          }
+          throw new Error(`${id} was not found in OSV or NVD.`);
+        }
+        if (/^CVE-/i.test(id)) {
+          const nvdData = await fetchNvdCve(
+            id,
+            `OSV returned status ${resp.status}, so this view is populated from NVD.`,
+          );
+          if (nvdData) {
+            setCveResult(nvdData);
+            if (options.updateUrl !== false) updateCveDeepLink(nvdData.id || id);
+            return;
+          }
         }
         throw new Error(text.trim() || `OSV lookup failed: ${resp.status}`);
       }
-      const data = JSON.parse(text);
+      let data = await mergeAliasAffectedPackages(JSON.parse(text));
+      const affected = Array.isArray(data?.affected) ? data.affected : [];
+      if (/^CVE-/i.test(id) && !affected.some(affectedHasSupportedPackage)) {
+        try {
+          const nvdData = await fetchNvdCve(id);
+          data = mergeNvdIntoAdvisory(data, nvdData);
+        } catch (nvdErr) {
+          addConsoleLines(
+            `! NVD enrichment failed: ${
+              nvdErr && nvdErr.message ? nvdErr.message : nvdErr
+            }`,
+          );
+        }
+      }
       setCveResult(data);
       if (options.updateUrl !== false) {
         updateCveDeepLink(data.id || id);
@@ -1891,6 +2351,10 @@ function App() {
   const handlePrimarySubmit = (evt) => {
     if (searchMode === "cve") {
       fetchCve(evt);
+      return;
+    }
+    if (searchMode === "repository") {
+      importGithubRepoDependencies(evt);
       return;
     }
     fetchDeps(evt);
@@ -2045,6 +2509,11 @@ function App() {
 
 
     let ver = forcedVer !== null ? forcedVer : version;
+    const versionFailureMessage = `Could not resolve a version for ${formatPackage(
+      mgrVal,
+      nsVal,
+      nameVal,
+    )}. Enter a version or try again when the package registry is reachable.`;
     if (!ver) {
       const info = await getVersionInfo(mgrVal, nsVal, nameVal, true);
       if (info) {
@@ -2053,6 +2522,10 @@ function App() {
         ver = info.latest || (Array.isArray(info.versions) && info.versions[0]) || "";
       }
       if (!ver) {
+        addAlert(versionFailureMessage);
+        addConsoleLines(`! ${versionFailureMessage}`);
+        setFormSubmitted(false);
+        setStatus("");
         setLoading(false);
         return;
       }
@@ -2077,6 +2550,9 @@ function App() {
           ver = info.latest || (Array.isArray(info.versions) && info.versions[0]) || "";
         }
         if (!ver) {
+          addAlert(versionFailureMessage);
+          addConsoleLines(`! ${versionFailureMessage}`);
+          setFormSubmitted(false);
           return;
         }
         setVersion(ver);
@@ -2117,7 +2593,6 @@ function App() {
 
       let directRes = {};
       let allRes = {};
-      let fetchedResults = false;
       const fetchAndLog = async (url) => {
         addConsoleLines(`> GET ${url}`);
         const resp = await fetch(url, { signal: controller.signal });
@@ -2141,10 +2616,14 @@ function App() {
         ]);
         directRes = resArr[0].data;
         allRes = resArr[1].data;
-        fetchedResults = true;
         setCacheStatus(resArr[1].cache || resArr[0].cache);
       } catch (err) {
-        if (err.name !== "AbortError") console.error(err);
+        if (err.name !== "AbortError") {
+          const message =
+            err && err.message ? err.message : "Unable to fetch dependency data.";
+          addAlert(message);
+          addConsoleLines(`! ${message}`);
+        }
       }
 
       const resolvedRootVersion =
@@ -2245,7 +2724,7 @@ function App() {
       setDeps(normalizeDependencyRisks(depList));
       setRepos(allRes.repositories || {});
       setScorecards(allRes.scorecards || {});
-      if (fetchedResults && options.updateUrl !== false) {
+      if (options.updateUrl !== false) {
         updatePackageDeepLink({
           manager: mgrVal,
           namespace: nsVal,
@@ -2274,9 +2753,24 @@ function App() {
     if (evt && evt.preventDefault) evt.preventDefault();
     const repo = githubRepoUrl.trim();
     if (!repo || githubRepoLoading) return;
+    setSearchMode("repository");
     setGithubRepoLoading(true);
     setGithubRepoError("");
     setGithubRepoResult(null);
+    setGithubRepoVulnStatus({});
+    setGithubRepoVulnLoading(false);
+    setGithubRepoVulnProgress("");
+    setGithubRepoStatusFilter("all");
+    setSelectedGithubRepoPackage(null);
+    setGithubRepoGraphExpanded(false);
+    if (githubRepoTransitiveAbortRef.current) {
+      githubRepoTransitiveAbortRef.current.abort();
+      githubRepoTransitiveAbortRef.current = null;
+    }
+    setGithubRepoTransitiveDeps({});
+    setGithubRepoTransitiveLoading(false);
+    setGithubRepoTransitiveProgress("");
+    setGithubRepoTransitiveError("");
     try {
       const resp = await fetchInternal(
         `${apiOrigin}/api/github/dependencies?repo=${encodeURIComponent(repo)}`,
@@ -2288,6 +2782,8 @@ function App() {
       const data = JSON.parse(text);
       setGithubRepoResult(data);
       setGithubRepoFilter("");
+      setGithubRepoStatusFilter("all");
+      setSelectedGithubRepoPackage(null);
       if (!data.packages || data.packages.length === 0) {
         setGithubRepoError(
           "No supported package dependencies were returned by GitHub's dependency graph.",
@@ -2369,8 +2865,14 @@ function App() {
         cacheStatus ||
         githubRepoUrl ||
         githubRepoFilter ||
+        githubRepoStatusFilter !== "all" ||
         githubRepoResult ||
         githubRepoError ||
+        githubRepoGraphExpanded ||
+        githubRepoTransitiveLoading ||
+        Object.keys(githubRepoTransitiveDeps).length > 0 ||
+        githubRepoTransitiveProgress ||
+        githubRepoTransitiveError ||
         cveQuery ||
         cveResult ||
         cveError,
@@ -2421,6 +2923,20 @@ function App() {
     setGithubRepoResult(null);
     setGithubRepoError("");
     setGithubRepoFilter("");
+    setGithubRepoStatusFilter("all");
+    setGithubRepoVulnStatus({});
+    setGithubRepoVulnLoading(false);
+    setGithubRepoVulnProgress("");
+    setSelectedGithubRepoPackage(null);
+    setGithubRepoGraphExpanded(false);
+    if (githubRepoTransitiveAbortRef.current) {
+      githubRepoTransitiveAbortRef.current.abort();
+      githubRepoTransitiveAbortRef.current = null;
+    }
+    setGithubRepoTransitiveDeps({});
+    setGithubRepoTransitiveLoading(false);
+    setGithubRepoTransitiveProgress("");
+    setGithubRepoTransitiveError("");
     setCveQuery("");
     setCveLoading(false);
     setCveResult(null);
@@ -2482,6 +2998,22 @@ function App() {
     });
     const svg = d3.select("#graph");
     svg.selectAll("*").remove();
+    const defs = svg.append("defs");
+    const labelShadowId = "graph-label-shadow";
+    const labelShadow = defs
+      .append("filter")
+      .attr("id", labelShadowId)
+      .attr("x", "-25%")
+      .attr("y", "-25%")
+      .attr("width", "150%")
+      .attr("height", "150%");
+    labelShadow
+      .append("feDropShadow")
+      .attr("dx", 0)
+      .attr("dy", 1)
+      .attr("stdDeviation", 1.1)
+      .attr("flood-color", graphLabelShadowColor())
+      .attr("flood-opacity", graphLabelShadowOpacity());
     const width = svg.node().clientWidth;
     const height = svg.node().clientHeight;
     const largeGraph = nodes.length > 55;
@@ -2673,27 +3205,42 @@ function App() {
         return `${d.id} - ${osvStatusLabel(d.osvStatus)}${severity}`;
       });
 
+    const pivotGraphLabel = (event, d) => {
+      event?.stopPropagation();
+      event?.preventDefault();
+      const at = d.id.lastIndexOf("@");
+      if (at <= 0) return;
+      pivotSearch({ name: d.id.slice(0, at), version: d.id.slice(at + 1) });
+    };
+
     const label = zoomLayer
       .append("g")
       .selectAll("text")
       .data(nodes)
       .enter()
       .append("text")
+      .attr("class", "graph-label")
+      .attr("role", "button")
+      .attr("tabindex", 0)
+      .attr("aria-label", (d) => `Analyze ${d.id}`)
       .text((d) => d.id)
       .attr("font-size", compactGraph ? 5.5 : largeGraph ? 9 : 10)
-      .attr("fill", (d) => (d.risk ? fillFor(d) : "#c9d1d9"))
-      .attr("text-anchor", compactGraph ? "middle" : "start")
-      .attr("paint-order", "stroke")
-      .attr("stroke", "rgba(13, 17, 23, 0.92)")
-      .attr("stroke-width", compactGraph ? 2 : 2.5)
+      .attr("fill", (d) => graphBaseLabelColor(d))
+      .attr("stroke", graphLabelHaloColor())
+      .attr("stroke-width", graphLabelStrokeWidth(compactGraph))
       .attr("stroke-linejoin", "round")
+      .attr("paint-order", "stroke")
+      .attr("text-anchor", compactGraph ? "middle" : "start")
+      .attr("filter", `url(#${labelShadowId})`)
       .style("display", (d) => (d.labelBaseVisible ? null : "none"))
-      .style("pointer-events", "none")
+      .style("pointer-events", "auto")
       .style("cursor", "pointer")
-      .on("click", (_, d) => {
-        const at = d.id.lastIndexOf("@");
-        if (at <= 0) return;
-        pivotSearch({ name: d.id.slice(0, at), version: d.id.slice(at + 1) });
+      .style("user-select", "none")
+      .on("click", pivotGraphLabel)
+      .on("keydown", (event, d) => {
+        if (event.key === "Enter" || event.key === " ") {
+          pivotGraphLabel(event, d);
+        }
       });
 
     nodesRef.current = node;
@@ -2830,7 +3377,7 @@ function App() {
   };
 
   const depLists = (() => {
-    if (!showResults) return null;
+    if (!showPackageResults) return null;
     const displayDeps = normalizeDependencyRisks(deps);
     const childMap = new Map();
     displayDeps.forEach((d) => {
@@ -2946,137 +3493,314 @@ function App() {
       );
     };
 
-    const renderSecurityOverview = (analysis) =>
-      e(
+    const renderSecurityOverview = (analysis) => {
+      const highCritical = analysis.severity.high + analysis.severity.critical;
+      const hasFindings = analysis.totals.findings > 0;
+      const hasUnresolved = includeVuln && analysis.totals.unresolvedPackages > 0;
+      const verdict = !includeVuln
+        ? {
+            tone: "unknown",
+            icon: "icons/warning.svg",
+            label: "OSV not checked",
+            detail: "Run an OSV scan to classify dependency risk.",
+          }
+        : highCritical > 0
+          ? {
+              tone: "danger",
+              icon: "icons/error.svg",
+              label: "Action needed",
+              detail: `${highCritical} high or critical advisories need attention.`,
+            }
+          : hasFindings
+            ? {
+                tone: "review",
+                icon: "icons/warning.svg",
+                label: "Review vulnerabilities",
+                detail: `${analysis.totals.findings} packages have OSV advisories.`,
+              }
+            : hasUnresolved
+              ? {
+                  tone: "unknown",
+                  icon: "icons/warning.svg",
+                  label: "Resolve OSV gaps",
+                  detail: `${analysis.totals.unresolvedPackages} packages need another lookup.`,
+                }
+              : {
+                  tone: "clean",
+                  icon: "icons/success.svg",
+                  label: "No known OSV risk",
+                  detail: `${analysis.totals.cleanPackages} packages checked clean.`,
+                };
+      const landscape = [
+        {
+          key: "vulnerable",
+          value: analysis.totals.findings,
+          label: "Vulnerable",
+          detail: "packages",
+          icon: "icons/error.svg",
+          tone: hasFindings ? "danger" : "clean",
+        },
+        {
+          key: "priority",
+          value: highCritical,
+          label: "High/Critical",
+          detail: "priority fixes",
+          icon: "icons/warning.svg",
+          tone: highCritical > 0 ? "danger" : "muted",
+        },
+        {
+          key: "transitive",
+          value: analysis.totals.transitiveFindings,
+          label: "Transitive",
+          detail: "findings",
+          icon: "icons/transitive.svg",
+          tone: analysis.totals.transitiveFindings > 0 ? "review" : "muted",
+        },
+        {
+          key: "clean",
+          value: analysis.totals.cleanPackages,
+          label: "Checked clean",
+          detail: "no advisory",
+          icon: "icons/success.svg",
+          tone: "clean",
+        },
+        {
+          key: "unresolved",
+          value: analysis.totals.unresolvedPackages,
+          label: "OSV gaps",
+          detail: "unresolved",
+          icon: "icons/cache.svg",
+          tone: hasUnresolved ? "unknown" : "muted",
+        },
+      ];
+      const nextSteps = hasFindings
+        ? [
+            {
+              key: "patch",
+              tone: highCritical > 0 ? "danger" : "review",
+              icon: highCritical > 0 ? "icons/error.svg" : "icons/warning.svg",
+              label: highCritical > 0 ? "Patch priority packages" : "Review advisories",
+              detail:
+                highCritical > 0
+                  ? "Start with high and critical packages before lower severity work."
+                  : "Inspect affected versions and decide whether a version bump is needed.",
+            },
+            {
+              key: "paths",
+              tone: analysis.totals.transitiveFindings > 0 ? "review" : "muted",
+              icon: "icons/transitive.svg",
+              label:
+                analysis.totals.transitiveFindings > 0
+                  ? "Trace transitive paths"
+                  : "Check direct impact",
+              detail:
+                analysis.totals.transitiveFindings > 0
+                  ? "Use the tree filters to see which parent packages bring risk in."
+                  : "The risky packages are direct or root dependencies.",
+            },
+            {
+              key: "evidence",
+              tone: "clean",
+              icon: "icons/checks.svg",
+              label: "Export evidence",
+              detail: "Download SBOM or CSV for tracking and review.",
+            },
+          ]
+        : hasUnresolved
+          ? [
+              {
+                key: "retry",
+                tone: "unknown",
+                icon: "icons/cache.svg",
+                label: "Resolve lookup gaps",
+                detail: "Filter OSV gaps and rerun analysis for packages without a result.",
+              },
+              {
+                key: "monitor",
+                tone: "clean",
+                icon: "icons/checks.svg",
+                label: "Keep the clean set",
+                detail: "Export JSON or SBOM once unresolved packages are cleared.",
+              },
+            ]
+          : [
+              {
+                key: "clean",
+                tone: "clean",
+                icon: "icons/success.svg",
+                label: includeVuln ? "Clean OSV scan" : "Risk not classified",
+                detail: includeVuln
+                  ? "No OSV advisories were returned for this dependency set."
+                  : "OSV vulnerability checks were disabled for this run.",
+              },
+              {
+                key: "evidence",
+                tone: "muted",
+                icon: "icons/checks.svg",
+                label: "Keep evidence",
+                detail: "Download JSON or SBOM for audit records.",
+              },
+            ];
+      const filterOptions = [
+        {
+          key: "all",
+          label: "All dependencies",
+          count: analysis.totals.checkedPackages,
+          disabled: false,
+        },
+        {
+          key: "vulnerable",
+          label: "Vulnerable",
+          count: analysis.totals.findings,
+          disabled: !includeVuln || analysis.findings.length === 0,
+        },
+        {
+          key: "unknown",
+          label: "Needs OSV check",
+          count: analysis.totals.unresolvedPackages,
+          disabled: !includeVuln || analysis.totals.unresolvedPackages === 0,
+        },
+      ];
+      const exportButton = (format, label, options = {}) =>
+        e(
+          "button",
+          {
+            type: "button",
+            className: "security-action-button",
+            onClick: () => exportSecurityAnalysis(analysis, format),
+            disabled: options.disabled,
+            title: options.title,
+            "aria-label": options.ariaLabel || `Export ${label}`,
+          },
+          e("span", { className: "security-action-icon", "aria-hidden": "true" }, options.icon),
+          e("span", null, label),
+        );
+      return e(
         "section",
-        { className: "security-overview" },
+        { className: `security-overview security-overview-${verdict.tone}` },
         e(
           "div",
           { className: "security-overview-header" },
           e(
             "div",
-            null,
+            { className: "security-title-block" },
             e("h3", null, "Security Triage"),
             e(
               "p",
-              null,
+              { className: "triage-summary-line" },
               includeVuln
-                ? `${analysis.totals.checkedPackages} packages tracked; ${analysis.totals.cleanPackages} checked clean; ${analysis.totals.unresolvedPackages} OSV unresolved`
-                : `${analysis.totals.checkedPackages} packages tracked; OSV not checked`,
+                ? `${analysis.totals.checkedPackages} packages tracked, ${analysis.totals.cleanPackages} clean, ${analysis.totals.unresolvedPackages} OSV gaps`
+                : `${analysis.totals.checkedPackages} packages tracked, OSV not checked`,
             ),
           ),
           e(
             "div",
-            { className: "security-actions" },
+            { className: `triage-verdict triage-verdict-${verdict.tone}` },
+            e("img", { src: verdict.icon, alt: "", "aria-hidden": "true" }),
             e(
-              "button",
-              {
-                type: "button",
-                onClick: () => exportSecurityAnalysis(analysis, "json"),
-              },
-              "Export JSON",
+              "span",
+              { className: "triage-verdict-copy" },
+              e("strong", null, verdict.label),
+              e("span", null, verdict.detail),
             ),
+          ),
+          e(
+            "div",
+            { className: "security-actions", "aria-label": "Download security data" },
+            exportButton("json", "JSON", {
+              icon: "{}",
+              ariaLabel: "Export JSON security report",
+            }),
+            exportButton("cyclonedx", "SBOM", {
+              icon: "SB",
+              title: "Export CycloneDX SBOM with OSV vulnerability details",
+              ariaLabel: "Export CycloneDX SBOM",
+            }),
+            exportButton("csv", "CSV", {
+              icon: "CSV",
+              disabled: analysis.findings.length === 0,
+              ariaLabel: "Export vulnerable package CSV",
+            }),
+          ),
+        ),
+        e(
+          "div",
+          { className: "security-stat-grid", "aria-label": "Risk landscape" },
+          landscape.map((item) =>
             e(
-              "button",
+              "div",
               {
-                type: "button",
-                onClick: () => exportSecurityAnalysis(analysis, "cyclonedx"),
-                title: "Export CycloneDX SBOM with OSV vulnerability details",
+                key: item.key,
+                className: `security-stat security-stat-${item.tone}`,
               },
-              "Export SBOM",
-            ),
-            e(
-              "button",
-              {
-                type: "button",
-                onClick: () => exportSecurityAnalysis(analysis, "csv"),
-                disabled: analysis.findings.length === 0,
-              },
-              "Export CSV",
+              e(
+                "span",
+                { className: "security-stat-icon", "aria-hidden": "true" },
+                e("img", { src: item.icon, alt: "" }),
+              ),
+              e(
+                "span",
+                { className: "security-stat-copy" },
+                e(
+                  "span",
+                  { className: `security-stat-value risk-${item.tone}` },
+                  item.value,
+                ),
+                e("span", { className: "security-stat-label" }, item.label),
+                e("span", { className: "security-stat-detail" }, item.detail),
+              ),
             ),
           ),
         ),
         e(
           "div",
-          { className: "security-stat-grid" },
-          e(
-            "div",
-            { className: "security-stat" },
-            e("span", { className: "security-stat-value" }, analysis.totals.findings),
-            e("span", null, "vulnerable packages"),
-          ),
-          e(
-            "div",
-            { className: "security-stat" },
+          { className: "triage-next-steps" },
+          nextSteps.map((step) =>
             e(
-              "span",
-              { className: "security-stat-value risk-high" },
-              analysis.severity.high + analysis.severity.critical,
+              "div",
+              {
+                key: step.key,
+                className: `triage-step triage-step-${step.tone}`,
+              },
+              e("img", { src: step.icon, alt: "", "aria-hidden": "true" }),
+              e(
+                "span",
+                null,
+                e("strong", null, step.label),
+                e("span", null, step.detail),
+              ),
             ),
-            e("span", null, "high or critical"),
           ),
+        ),
+        e(
+          "div",
+          { className: "triage-filter-shell" },
+          e("span", { className: "triage-filter-label" }, "Filter"),
           e(
             "div",
-            { className: "security-stat" },
-            e("span", { className: "security-stat-value" }, analysis.totals.transitiveFindings),
-            e("span", null, "transitive findings"),
-          ),
-          e(
-            "div",
-            { className: "security-stat" },
-            e("span", { className: "security-stat-value" }, analysis.totals.cleanPackages),
-            e("span", null, "no OSV advisory"),
-          ),
-          e(
-            "div",
-            { className: "security-stat" },
-            e(
-              "span",
-              { className: "security-stat-value risk-unknown" },
-              analysis.totals.unresolvedPackages,
+            { className: "dependency-filter-row" },
+            filterOptions.map((option) =>
+              e(
+                "button",
+                {
+                  key: option.key,
+                  type: "button",
+                  className: dependencyListFilter === option.key ? "active" : "",
+                  onClick: () => setDependencyListFilter(option.key),
+                  disabled: option.disabled,
+                },
+                e("span", null, option.label),
+                e("span", { className: "filter-count" }, option.count),
+              ),
             ),
-            e("span", null, "OSV unresolved"),
           ),
         ),
         includeVuln &&
           e(
             "p",
             { className: "osv-status-note" },
-            "Gray dots mean OSV checked the resolved version and returned no advisory. Amber outlined dots mean OSV was not resolved or not checked.",
+            "Graph dots: gray is checked clean; amber outline means OSV needs another lookup.",
           ),
-        e(
-          "div",
-          { className: "dependency-filter-row" },
-          e(
-            "button",
-            {
-              type: "button",
-              className: dependencyListFilter === "all" ? "active" : "",
-              onClick: () => setDependencyListFilter("all"),
-            },
-            "All dependencies",
-          ),
-          e(
-            "button",
-            {
-              type: "button",
-              className: dependencyListFilter === "vulnerable" ? "active" : "",
-              onClick: () => setDependencyListFilter("vulnerable"),
-              disabled: !includeVuln || analysis.findings.length === 0,
-            },
-            "Vulnerable only",
-          ),
-          e(
-            "button",
-            {
-              type: "button",
-              className: dependencyListFilter === "unknown" ? "active" : "",
-              onClick: () => setDependencyListFilter("unknown"),
-              disabled: !includeVuln || analysis.totals.unresolvedPackages === 0,
-            },
-            "OSV unresolved",
-          ),
-        ),
         analysis.findings.length > 0
           ? e(
               "ol",
@@ -3116,6 +3840,7 @@ function App() {
                 : "OSV checking is disabled for this run.",
             ),
       );
+    };
 
     const matchesDependencyFilter = (dep) => {
       if (dependencyListFilter === "vulnerable") return Boolean(dep.risk);
@@ -3534,16 +4259,857 @@ function App() {
     visiblePackageSuggestions.length > 0 && !showPackageTypeahead;
   const githubRepoPackages = githubRepoResult?.packages || [];
   const githubRepoQuery = githubRepoFilter.trim().toLowerCase();
+  const githubRepoFilterMatchesPackage = (pkg) => {
+    if (githubRepoStatusFilter === "all") return true;
+    if (githubRepoStatusFilter === "skipped") return false;
+    if (githubRepoStatusFilter.startsWith("manager:")) {
+      return pkg.manager === githubRepoStatusFilter.slice("manager:".length);
+    }
+    const record = githubRepoVulnStatus[githubRepoPackageKey(pkg)] || null;
+    if (
+      githubRepoStatusFilter === "vulnerable" ||
+      githubRepoStatusFilter === "osv-findings"
+    ) {
+      return record?.status === "vulnerable";
+    }
+    if (githubRepoStatusFilter === "high") {
+      return (
+        record?.status === "vulnerable" &&
+        (riskRank[record.risk] || 0) >= riskRank.high
+      );
+    }
+    if (githubRepoStatusFilter === "checked") {
+      return ["vulnerable", "no_advisory"].includes(record?.status);
+    }
+    return true;
+  };
+  const githubRepoStatusFilteredPackages = githubRepoPackages.filter(
+    githubRepoFilterMatchesPackage,
+  );
   const filteredGithubRepoPackages = githubRepoQuery
-    ? githubRepoPackages.filter((pkg) =>
+    ? githubRepoStatusFilteredPackages.filter((pkg) =>
         githubPackageSearchText(pkg).includes(githubRepoQuery),
       )
-    : githubRepoPackages;
+    : githubRepoStatusFilteredPackages;
   const visibleGithubRepoPackages = filteredGithubRepoPackages.slice(0, 80);
+  const githubRepoGraphPackageNodeId = (pkg, index) => {
+    const key = githubRepoPackageKey(pkg);
+    return `${key || `${pkg.manager || "pkg"}:${pkg.name || "dependency"}`}:${index}`;
+  };
+  const githubRepoGraphPackageSignature = filteredGithubRepoPackages
+    .map(githubRepoGraphPackageNodeId)
+    .join("\n");
   const githubRepoManagerCounts = githubRepoPackages.reduce((acc, pkg) => {
     acc[pkg.manager] = (acc[pkg.manager] || 0) + 1;
     return acc;
   }, {});
+  const selectedGithubRepoPackageKey = githubRepoPackageKey(
+    selectedGithubRepoPackage,
+  );
+  const previewGithubRepoPackage =
+    selectedGithubRepoPackage?.manager && selectedGithubRepoPackage?.name
+      ? selectedGithubRepoPackage
+      : null;
+  const normalizeGithubRepoVersion = (value) =>
+    String(value || "")
+      .trim()
+      .replace(/^v(?=\d)/i, "");
+  const githubRepoHasExactVersion = (pkg) => {
+    const versionValue = normalizeGithubRepoVersion(pkg?.version);
+    return Boolean(
+      pkg?.manager &&
+        pkg?.name &&
+        versionValue &&
+        versionValue.toLowerCase() !== "latest" &&
+        !/[<>=*|,\s]/.test(versionValue),
+    );
+  };
+  const githubRepoDependencyApiUrl = (pkg, recursive = true) => {
+    if (!githubRepoHasExactVersion(pkg)) return "";
+    const enc = encodeURIComponent;
+    const managerKey = pkg.manager;
+    const versionValue = normalizeGithubRepoVersion(pkg.version);
+    const base = `${apiOrigin}/api/dependencies/${enc(managerKey)}`;
+    let path = "";
+    if (managerKey === "go") {
+      const modulePath = pkg.namespace ? `${pkg.namespace}/${pkg.name}` : pkg.name;
+      path = `${base}/${modulePath.split("/").map(enc).join("/")}/${enc(versionValue)}`;
+    } else {
+      path = pkg.namespace
+        ? `${base}/${enc(pkg.namespace)}/${enc(pkg.name)}/${enc(versionValue)}`
+        : `${base}/${enc(pkg.name)}/${enc(versionValue)}`;
+    }
+    return `${path}?recursive=${recursive ? "true" : "false"}&vuln=false&scorecard=false`;
+  };
+  const githubRepoPackageFromFormattedName = (managerKey, packageName, versionValue) => {
+    const parsed = splitDeepLinkName(managerKey, "", packageName);
+    return {
+      manager: managerKey,
+      namespace: parsed.namespace || "",
+      name: parsed.name || packageName,
+      version: versionValue || "",
+      display: packageName,
+    };
+  };
+  const githubRepoTransitiveRootCandidates = filteredGithubRepoPackages.filter(
+    (pkg) => githubRepoDependencyApiUrl(pkg),
+  );
+  const githubRepoVisibleRootKeys = new Set(
+    filteredGithubRepoPackages.map(githubRepoPackageKey).filter(Boolean),
+  );
+  const githubRepoTransitiveSummary = Object.entries(githubRepoTransitiveDeps)
+    .filter(([rootKey]) => githubRepoVisibleRootKeys.has(rootKey))
+    .reduce(
+      (summary, [, data]) => {
+        if (data?.failed) {
+          summary.failedRoots += 1;
+          return summary;
+        }
+        summary.resolvedRoots += 1;
+        Object.entries(data?.dependencies || {}).forEach(([depName, depVersion]) => {
+          const nodeId = `transitive:${data.manager}:${depName}@${depVersion || ""}`;
+          summary.nodeIds.add(nodeId);
+        });
+        return summary;
+      },
+      { resolvedRoots: 0, failedRoots: 0, nodeIds: new Set() },
+    );
+  const githubRepoTransitiveNodeCount = githubRepoTransitiveSummary.nodeIds.size;
+  const githubRepoGraphNodeCount =
+    filteredGithubRepoPackages.length + githubRepoTransitiveNodeCount;
+  const githubRepoTransitiveGraphSignature = Object.entries(githubRepoTransitiveDeps)
+    .filter(([rootKey]) => githubRepoVisibleRootKeys.has(rootKey))
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([rootKey, data]) => {
+      const depsSignature = Object.entries(data?.dependencies || {})
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([depName, depVersion]) => `${depName}@${depVersion || ""}`)
+        .join(",");
+      return `${rootKey}:${data?.failed ? "failed" : depsSignature}`;
+    })
+    .join("\n");
+  const githubRepoPackageOsvTarget = (pkg) => {
+    const versionValue = normalizeGithubRepoVersion(pkg?.version);
+    if (!githubRepoHasExactVersion(pkg)) {
+      return null;
+    }
+    const packageName = formatPackage(
+      pkg.manager,
+      pkg.namespace || "",
+      pkg.name,
+    );
+    if (!packageName) return null;
+    return {
+      manager: pkg.manager,
+      packageName,
+      version: versionValue,
+    };
+  };
+  const githubRepoPackageVulnRecord = (pkg) => {
+    const key = githubRepoPackageKey(pkg);
+    return key ? githubRepoVulnStatus[key] || null : null;
+  };
+  const githubRepoPackageRiskClass = (record) =>
+    record?.status === "vulnerable"
+      ? ` repo-risk-${record.risk || "advisory"}`
+      : "";
+  const githubRepoRiskPalette = appearanceMode === "dark"
+    ? {
+        critical: { fill: "#7f1d1d", stroke: "#f87171" },
+        high: { fill: "#7f1d1d", stroke: "#fb7185" },
+        medium: { fill: "#78350f", stroke: "#fbbf24" },
+        low: { fill: "#064e3b", stroke: "#34d399" },
+        advisory: { fill: "#334155", stroke: "#fbbf24" },
+      }
+    : {
+        critical: { fill: "#fee2e2", stroke: "#b42318" },
+        high: { fill: "#ffe4e6", stroke: "#c93737" },
+        medium: { fill: "#fff4d6", stroke: "#b56b00" },
+        low: { fill: "#e4f8ef", stroke: "#168a56" },
+        advisory: { fill: "#f1f5f9", stroke: "#8a6a12" },
+      };
+  const githubRepoRiskStyle = (record) =>
+    record?.status === "vulnerable"
+      ? githubRepoRiskPalette[record.risk || "advisory"] ||
+        githubRepoRiskPalette.advisory
+      : null;
+  const githubRepoGraphNodeClassName = (d, record) =>
+    [
+      "repo-graph-node",
+      d.root && "root",
+      d.managerGroup && "manager",
+      d.pkg && "package",
+      d.transitiveDep && "transitive",
+      d.pkg && record?.status === "vulnerable" && "vulnerable",
+      d.pkg &&
+        record?.status === "vulnerable" &&
+        `risk-${record.risk || "advisory"}`,
+      d.selected && "selected",
+    ]
+      .filter(Boolean)
+      .join(" ");
+  const githubRepoGraphPackageFill = (d, record) => {
+    const riskStyle = githubRepoRiskStyle(record);
+    if (riskStyle) return riskStyle.fill;
+    if (d.selected) return appearanceMode === "dark" ? "#fbbf24" : "#b45309";
+    return appearanceMode === "dark" ? "#1d2a36" : "#ffffff";
+  };
+  const githubRepoGraphPackageStroke = (d, record) => {
+    const riskStyle = githubRepoRiskStyle(record);
+    if (riskStyle) return riskStyle.stroke;
+    if (d.selected) return appearanceMode === "dark" ? "#fde68a" : "#92400e";
+    return appearanceMode === "dark" ? "#8ba3b5" : "#7a8a9a";
+  };
+  const githubRepoGraphPackageStrokeWidth = (d, record) =>
+    d.selected ? 3 : record?.status === "vulnerable" ? 2.4 : 1.8;
+  const githubRepoScoreLabel = (score) => {
+    const value = Number(score) || 0;
+    if (value <= 0) return "";
+    return Number.isInteger(value) ? String(value) : value.toFixed(1);
+  };
+  const githubRepoRiskLabel = (record) => {
+    if (!record) return "";
+    if (record.status === "vulnerable") {
+      const scoreText = githubRepoScoreLabel(record.score);
+      const severityText = record.risk || "advisory";
+      return `${severityText}${scoreText ? ` ${scoreText}` : ""}`;
+    }
+    if (record.status === "no_advisory") return "No OSV advisory";
+    if (record.status === "not_checked") return "OSV not checked";
+    if (record.status === "unknown") return "OSV unresolved";
+    return "";
+  };
+  const githubRepoVulnRecords = Object.values(githubRepoVulnStatus);
+  const githubRepoCheckedCount = githubRepoVulnRecords.filter((record) =>
+    ["vulnerable", "no_advisory"].includes(record.status),
+  ).length;
+  const githubRepoVulnerableCount = githubRepoVulnRecords.filter(
+    (record) => record.status === "vulnerable",
+  ).length;
+  const githubRepoHighRiskCount = githubRepoVulnRecords.filter(
+    (record) =>
+      record.status === "vulnerable" &&
+      (riskRank[record.risk] || 0) >= riskRank.high,
+  ).length;
+  const previewGithubRepoVuln = previewGithubRepoPackage
+    ? githubRepoPackageVulnRecord(previewGithubRepoPackage)
+    : null;
+  const applyGithubRepoStatusFilter = (filter) => {
+    const nextFilter =
+      filter !== "all" && githubRepoStatusFilter === filter ? "all" : filter;
+    setGithubRepoStatusFilter(nextFilter);
+    setSelectedGithubRepoPackage(null);
+  };
+  const githubRepoSummaryFilterButton = (filter, label, options = {}) => {
+    const active = githubRepoStatusFilter === filter;
+    return e(
+      "button",
+      {
+        key: options.key || `repo-filter-${filter}`,
+        type: "button",
+        className: [
+          "github-import-stat",
+          active && "active",
+          options.risk && "github-import-risk-stat",
+          options.high && "high",
+        ]
+          .filter(Boolean)
+          .join(" "),
+        onClick: () => applyGithubRepoStatusFilter(filter),
+        "aria-pressed": active,
+        title: options.title || `Filter repository packages by ${label}`,
+      },
+      label,
+    );
+  };
+  const githubRepoSummaryStatus = (label) =>
+    e(
+      "span",
+      { className: "github-import-stat is-static" },
+      label,
+    );
+  const githubRepoFilterEmptyMessage =
+    githubRepoStatusFilter === "skipped"
+      ? `${githubRepoResult?.unsupported_count || 0} skipped dependenc${
+          githubRepoResult?.unsupported_count === 1 ? "y was" : "ies were"
+        } counted by GitHub but are not included in the supported package graph.`
+      : githubRepoStatusFilter !== "all" || githubRepoQuery
+        ? "No imported dependencies match the active filters."
+        : "No supported dependencies were returned.";
+  const cancelGithubRepoTransitiveDependencies = () => {
+    if (githubRepoTransitiveAbortRef.current) {
+      githubRepoTransitiveAbortRef.current.abort();
+      githubRepoTransitiveAbortRef.current = null;
+    }
+    setGithubRepoTransitiveLoading(false);
+    setGithubRepoTransitiveProgress("Transitive resolution cancelled");
+  };
+  const clearGithubRepoTransitiveDependencies = () => {
+    cancelGithubRepoTransitiveDependencies();
+    setGithubRepoTransitiveDeps({});
+    setGithubRepoTransitiveProgress("");
+    setGithubRepoTransitiveError("");
+  };
+  const resolveGithubRepoTransitiveDependencies = async () => {
+    if (githubRepoTransitiveLoading) {
+      cancelGithubRepoTransitiveDependencies();
+      return;
+    }
+    const roots = githubRepoTransitiveRootCandidates.filter(
+      (pkg) => !githubRepoTransitiveDeps[githubRepoPackageKey(pkg)],
+    );
+    if (roots.length === 0) {
+      setGithubRepoTransitiveError("");
+      setGithubRepoTransitiveProgress(
+        githubRepoTransitiveRootCandidates.length === 0
+          ? "No visible packages have exact versions to resolve"
+          : "Transitive graph is already resolved for the visible packages",
+      );
+      return;
+    }
+
+    const controller = new AbortController();
+    githubRepoTransitiveAbortRef.current = controller;
+    setGithubRepoTransitiveLoading(true);
+    setGithubRepoTransitiveError("");
+    setGithubRepoTransitiveProgress(`Resolving 0/${roots.length} package graphs`);
+
+    const nextDeps = { ...githubRepoTransitiveDeps };
+    let completed = 0;
+    let failed = 0;
+    const commitProgress = (force = false) => {
+      if (controller.signal.aborted) return;
+      if (force || completed % 8 === 0) {
+        setGithubRepoTransitiveDeps({ ...nextDeps });
+      }
+      setGithubRepoTransitiveProgress(
+        `Resolving ${completed}/${roots.length} package graphs${
+          failed ? `; ${failed} failed` : ""
+        }`,
+      );
+    };
+
+    await mapLimit(roots, 4, async (pkg) => {
+      if (controller.signal.aborted) return null;
+      const rootKey = githubRepoPackageKey(pkg);
+      const rootPackageName = formatPackage(
+        pkg.manager,
+        pkg.namespace || "",
+        pkg.name,
+      );
+      try {
+        const resp = await fetchInternal(githubRepoDependencyApiUrl(pkg), {
+          signal: controller.signal,
+        });
+        const text = await resp.text();
+        if (!resp.ok) {
+          throw new Error(text.trim() || `dependency lookup failed: ${resp.status}`);
+        }
+        const data = JSON.parse(text);
+        nextDeps[rootKey] = {
+          manager: pkg.manager,
+          rootPackageName,
+          rootVersion: pkg.version || "",
+          dependencies: data.dependencies || {},
+          parents: data.parents || {},
+          errors: data.errors || {},
+        };
+      } catch (err) {
+        if (controller.signal.aborted) return null;
+        failed += 1;
+        nextDeps[rootKey] = {
+          manager: pkg.manager,
+          rootPackageName,
+          rootVersion: pkg.version || "",
+          dependencies: {},
+          parents: {},
+          failed: true,
+          error: err && err.message ? err.message : "Unable to resolve package graph",
+        };
+      } finally {
+        if (!controller.signal.aborted) {
+          completed += 1;
+          commitProgress(false);
+        }
+      }
+      return null;
+    });
+
+    if (controller.signal.aborted) {
+      setGithubRepoTransitiveLoading(false);
+      setGithubRepoTransitiveProgress("Transitive resolution cancelled");
+      return;
+    }
+
+    githubRepoTransitiveAbortRef.current = null;
+    setGithubRepoTransitiveDeps({ ...nextDeps });
+    setGithubRepoTransitiveLoading(false);
+    setGithubRepoTransitiveProgress(
+      `Resolved ${completed - failed}/${roots.length} package graphs${
+        failed ? `; ${failed} failed` : ""
+      }`,
+    );
+    setGithubRepoTransitiveError(
+      failed ? `${failed} package graph${failed === 1 ? "" : "s"} could not be resolved.` : "",
+    );
+  };
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const packages = githubRepoResult?.packages || [];
+    if (packages.length === 0) {
+      setGithubRepoVulnStatus({});
+      setGithubRepoVulnLoading(false);
+      setGithubRepoVulnProgress("");
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const initialStatus = {};
+    const groupedChecks = new Map();
+    packages.forEach((pkg) => {
+      const key = githubRepoPackageKey(pkg);
+      const target = githubRepoPackageOsvTarget(pkg);
+      if (!key || !target) return;
+      const cacheKey = versionRiskKey(
+        target.manager,
+        target.packageName,
+        target.version,
+      );
+      const cached = versionRiskCacheRef.current.get(cacheKey);
+      if (cached) {
+        initialStatus[key] = cached;
+        return;
+      }
+      if (!groupedChecks.has(cacheKey)) {
+        groupedChecks.set(cacheKey, {
+          ...target,
+          cacheKey,
+          keys: [],
+        });
+      }
+      groupedChecks.get(cacheKey).keys.push(key);
+    });
+
+    const checks = Array.from(groupedChecks.values());
+    setGithubRepoVulnStatus(initialStatus);
+    if (checks.length === 0) {
+      setGithubRepoVulnLoading(false);
+      setGithubRepoVulnProgress(
+        Object.keys(initialStatus).length > 0
+          ? "OSV status loaded from cache"
+          : "No exact package versions available for OSV coloring",
+      );
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setGithubRepoVulnLoading(true);
+    setGithubRepoVulnProgress(
+      `Checking OSV for 0/${checks.length} versioned packages`,
+    );
+
+    const accumulatedStatus = { ...initialStatus };
+    let completed = 0;
+    const commitStatus = (force = false) => {
+      if (cancelled) return;
+      if (force || completed % 25 === 0) {
+        setGithubRepoVulnStatus({ ...accumulatedStatus });
+      }
+      setGithubRepoVulnProgress(
+        `Checking OSV for ${completed}/${checks.length} versioned packages`,
+      );
+    };
+
+    mapLimit(checks, 6, async (item) => {
+      let record;
+      const result = await queryOsvVulns(
+        item.manager,
+        item.packageName,
+        item.version,
+      );
+      const status = result.status || {};
+      if (status.status === "vulnerable" || status.status === "no_advisory") {
+        record = summarizeVersionRisk(result.vulns || []);
+        versionRiskCacheRef.current.set(item.cacheKey, record);
+      } else {
+        record = {
+          status: status.status || "unknown",
+          score: 0,
+          risk: null,
+          advisoryCount: 0,
+          advisoryIds: [],
+          cveIds: [],
+          error: status.error || "",
+        };
+      }
+      item.keys.forEach((key) => {
+        accumulatedStatus[key] = record;
+      });
+      completed += 1;
+      commitStatus(false);
+      return record;
+    })
+      .catch((err) => {
+        if (cancelled) return;
+        const message =
+          err && err.message ? err.message : "Unable to resolve repository OSV status.";
+        setGithubRepoVulnProgress(message);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setGithubRepoVulnStatus({ ...accumulatedStatus });
+        setGithubRepoVulnLoading(false);
+        const vulnerable = Object.values(accumulatedStatus).filter(
+          (record) => record.status === "vulnerable",
+        ).length;
+        setGithubRepoVulnProgress(
+          vulnerable > 0
+            ? `${vulnerable} vulnerable package${vulnerable === 1 ? "" : "s"} found by OSV`
+            : `OSV checked ${completed} versioned package${completed === 1 ? "" : "s"}`,
+        );
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [githubRepoResult]);
+
+  React.useEffect(() => {
+    const svgEl = repoGraphRef.current;
+    if (!svgEl) return undefined;
+
+    const svg = d3.select(svgEl);
+    svg.selectAll("*").remove();
+
+    const repoGraphPackages = filteredGithubRepoPackages;
+    if (!githubRepoResult || repoGraphPackages.length === 0) {
+      return undefined;
+    }
+
+    const isDark = appearanceMode === "dark";
+    const width = Math.max(svgEl.clientWidth || 560, 360);
+    const height = Math.max(svgEl.clientHeight || 420, 320);
+    const rootId = "__repository__";
+    const managers = Array.from(
+      new Set(repoGraphPackages.map((pkg) => pkg.manager || "unknown")),
+    ).sort((a, b) => a.localeCompare(b));
+    const palette = isDark
+      ? ["#38bdf8", "#a78bfa", "#fbbf24", "#34d399", "#fb7185", "#f472b6"]
+      : ["#0f6970", "#7c3aed", "#b26a00", "#16845a", "#b42318", "#9a3412"];
+    const managerColor = managers.reduce((acc, mgr, index) => {
+      acc[mgr] = palette[index % palette.length];
+      return acc;
+    }, {});
+    const trimGraphLabel = (value, max = 24) => {
+      const text = String(value || "");
+      return text.length > max ? `${text.slice(0, max - 1)}...` : text;
+    };
+
+    const nodes = [
+      {
+        id: rootId,
+        label: githubRepoResult.repository || "Repository",
+        root: true,
+      },
+      ...managers.map((mgr) => ({
+        id: `manager:${mgr}`,
+        label: pmDisplayNames[mgr] || mgr,
+        manager: mgr,
+        managerGroup: true,
+      })),
+    ];
+    const packageNodes = repoGraphPackages.map((pkg, index) => {
+      const key = githubRepoPackageKey(pkg);
+      const vulnRecord = key ? githubRepoVulnStatus[key] || null : null;
+      return {
+        id: githubRepoGraphPackageNodeId(pkg, index),
+        key,
+        label: githubPackageLabel(pkg),
+        version: pkg.version || "",
+        manager: pkg.manager || "unknown",
+        vulnRecord,
+        pkg,
+        selected: key && key === selectedGithubRepoPackageKey,
+      };
+    });
+    nodes.push(...packageNodes);
+    const transitiveNodesById = new Map();
+    const transitiveLinks = [];
+    const transitiveNodeId = (managerKey, packageName, versionValue) =>
+      `transitive:${managerKey}:${packageName}@${versionValue || ""}`;
+    packageNodes.forEach((packageNode) => {
+      if (!packageNode.key) return;
+      const expansion = githubRepoTransitiveDeps[packageNode.key];
+      if (!expansion || expansion.failed) return;
+      const dependencyEntries = Object.entries(expansion.dependencies || {});
+      const parents = expansion.parents || {};
+      dependencyEntries.forEach(([depName, depVersion]) => {
+        if (!depName || depName === expansion.rootPackageName) return;
+        const depNodeId = transitiveNodeId(expansion.manager, depName, depVersion);
+        if (!transitiveNodesById.has(depNodeId)) {
+          const depPkg = githubRepoPackageFromFormattedName(
+            expansion.manager,
+            depName,
+            depVersion,
+          );
+          const depKey = githubRepoPackageKey(depPkg);
+          const depRecord = depKey ? githubRepoVulnStatus[depKey] || null : null;
+          transitiveNodesById.set(depNodeId, {
+            id: depNodeId,
+            key: depKey,
+            label: githubPackageLabel(depPkg),
+            version: depVersion || "",
+            manager: expansion.manager,
+            vulnRecord: depRecord,
+            pkg: depPkg,
+            transitiveDep: true,
+            selected: depKey && depKey === selectedGithubRepoPackageKey,
+          });
+        }
+
+        const parentValues = Array.isArray(parents[depName])
+          ? parents[depName]
+          : [parents[depName] || ""];
+        parentValues.forEach((parentName) => {
+          const parentVersion = expansion.dependencies[parentName];
+          const source =
+            parentName &&
+            parentName !== expansion.rootPackageName &&
+            parentVersion !== undefined
+              ? transitiveNodeId(expansion.manager, parentName, parentVersion)
+              : packageNode.id;
+          transitiveLinks.push({
+            source,
+            target: depNodeId,
+            kind: "transitive",
+          });
+        });
+      });
+    });
+    const transitiveNodes = Array.from(transitiveNodesById.values());
+    nodes.push(...transitiveNodes);
+
+    const links = managers
+      .map((mgr) => ({ source: rootId, target: `manager:${mgr}`, kind: "manager" }))
+      .concat(
+        packageNodes.map((node) => ({
+          source: `manager:${node.manager}`,
+          target: node.id,
+          kind: "package",
+        })),
+        transitiveLinks,
+      );
+
+    svg.attr("viewBox", `0 0 ${width} ${height}`);
+    svg.attr("preserveAspectRatio", "xMidYMid meet");
+
+    const layer = svg.append("g").attr("class", "repo-graph-layer");
+    const link = layer
+      .append("g")
+      .attr("class", "repo-graph-links")
+      .selectAll("line")
+      .data(links)
+      .enter()
+      .append("line")
+      .attr("stroke", isDark ? "rgba(148, 163, 184, 0.34)" : "rgba(83, 100, 113, 0.28)")
+      .attr("stroke-width", 1.2);
+
+    const node = layer
+      .append("g")
+      .attr("class", "repo-graph-nodes")
+      .selectAll("circle")
+      .data(nodes)
+      .enter()
+      .append("circle")
+      .attr("class", (d) =>
+        githubRepoGraphNodeClassName(d, d.vulnRecord),
+      )
+      .attr("r", (d) => {
+        if (d.root) return 15;
+        if (d.managerGroup) return 10;
+        if (d.transitiveDep) return d.selected ? 7 : 4.4;
+        return d.selected ? 8 : 5.5;
+      })
+      .attr("fill", (d) => {
+        if (d.root) return isDark ? "#2dd4bf" : "#0f6970";
+        if (d.managerGroup) return managerColor[d.manager] || palette[0];
+        return githubRepoGraphPackageFill(d, d.vulnRecord);
+      })
+      .attr("stroke", (d) => {
+        if (d.root) return isDark ? "#99f6e4" : "#0b4f55";
+        if (d.managerGroup) return "#ffffff";
+        return githubRepoGraphPackageStroke(d, d.vulnRecord);
+      })
+      .attr("stroke-width", (d) =>
+        d.pkg ? githubRepoGraphPackageStrokeWidth(d, d.vulnRecord) : 2.2,
+      )
+      .style("cursor", (d) => (d.pkg ? "pointer" : "default"))
+      .on("click", (event, d) => {
+        if (!d.pkg) return;
+        event.stopPropagation();
+        setSelectedGithubRepoPackage(d.pkg);
+      });
+
+    node
+      .append("title")
+      .text((d) => {
+        if (!d.pkg) return d.label;
+        return [
+          `${githubPackageLabel(d.pkg)}${d.pkg.version ? `@${d.pkg.version}` : ""}`,
+          pmDisplayNames[d.pkg.manager] || d.pkg.manager,
+          githubRepoRiskLabel(d.vulnRecord),
+        ]
+          .filter(Boolean)
+          .join(" - ");
+      });
+
+    const graphPackageLikeCount = packageNodes.length + transitiveNodes.length;
+    const shouldShowPackageLabels = graphPackageLikeCount <= 36;
+    const label = layer
+      .append("g")
+      .attr("class", "repo-graph-labels")
+      .selectAll("text")
+      .data(
+        nodes.filter(
+          (d) => d.root || d.managerGroup || d.selected || (shouldShowPackageLabels && d.pkg),
+        ),
+      )
+      .enter()
+      .append("text")
+      .attr("class", (d) =>
+        ["repo-graph-label", d.selected && "selected"].filter(Boolean).join(" "),
+      )
+      .attr("font-size", (d) => (d.root ? 12 : d.managerGroup ? 10 : 9))
+      .attr("font-weight", (d) => (d.root || d.managerGroup || d.selected ? 800 : 650))
+      .attr("fill", isDark ? "#d7e2ea" : "#1f2937")
+      .text((d) => {
+        if (d.root) return "Repository";
+        if (d.managerGroup) return d.label;
+        return trimGraphLabel(`${d.label}${d.version ? `@${d.version}` : ""}`);
+      })
+      .style("pointer-events", (d) => (d.pkg ? "auto" : "none"))
+      .style("cursor", (d) => (d.pkg ? "pointer" : "default"))
+      .on("click", (event, d) => {
+        if (!d.pkg) return;
+        event.stopPropagation();
+        setSelectedGithubRepoPackage(d.pkg);
+      });
+
+    const simulation = d3
+      .forceSimulation(nodes)
+      .force(
+        "link",
+        d3
+          .forceLink(links)
+          .id((d) => d.id)
+          .distance((d) => {
+            if (d.kind === "manager") return 108;
+            if (d.kind === "transitive") return 32;
+            return 44;
+          })
+          .strength(0.72),
+      )
+      .force(
+        "charge",
+        d3.forceManyBody().strength(graphPackageLikeCount > 1200 ? -18 : graphPackageLikeCount > 80 ? -34 : -74),
+      )
+      .force(
+        "collide",
+        d3
+          .forceCollide()
+          .radius((d) =>
+            d.root ? 26 : d.managerGroup ? 20 : d.transitiveDep ? 9 : 13,
+          ),
+      )
+      .force("x", d3.forceX(width / 2).strength(0.05))
+      .force("y", d3.forceY(height / 2).strength(0.08));
+
+    svg.on("click", () => setSelectedGithubRepoPackage(null));
+
+    const renderSettledGraph = () => {
+      link
+        .attr("x1", (d) => d.source.x)
+        .attr("y1", (d) => d.source.y)
+        .attr("x2", (d) => d.target.x)
+        .attr("y2", (d) => d.target.y);
+      node
+        .attr("cx", (d) => Math.max(18, Math.min(width - 18, d.x)))
+        .attr("cy", (d) => Math.max(18, Math.min(height - 18, d.y)));
+      label
+        .attr("x", (d) => Math.max(24, Math.min(width - 24, d.x + 11)))
+        .attr("y", (d) => Math.max(22, Math.min(height - 22, d.y + 4)));
+    };
+
+    const tickCount =
+      graphPackageLikeCount > 1600
+        ? 65
+        : graphPackageLikeCount > 900
+        ? 80
+        : graphPackageLikeCount > 250
+          ? 110
+          : 150;
+    simulation.stop();
+    for (let i = 0; i < tickCount; i += 1) {
+      simulation.tick();
+    }
+    renderSettledGraph();
+
+    return () => simulation.stop();
+  }, [
+    githubRepoResult,
+    selectedGithubRepoPackageKey,
+    appearanceMode,
+    githubRepoGraphPackageSignature,
+    githubRepoTransitiveGraphSignature,
+    githubRepoGraphExpanded,
+  ]);
+
+  React.useEffect(() => {
+    const svgEl = repoGraphRef.current;
+    if (!svgEl) return;
+    const svg = d3.select(svgEl);
+    const packageNodes = svg.selectAll(".repo-graph-node.package");
+    if (packageNodes.empty()) return;
+
+    packageNodes
+      .attr("class", (d) => {
+        const record = d.key ? githubRepoVulnStatus[d.key] || null : null;
+        d.vulnRecord = record;
+        return githubRepoGraphNodeClassName(d, record);
+      })
+      .attr("fill", (d) => {
+        const record = d.key ? githubRepoVulnStatus[d.key] || null : null;
+        return githubRepoGraphPackageFill(d, record);
+      })
+      .attr("stroke", (d) => {
+        const record = d.key ? githubRepoVulnStatus[d.key] || null : null;
+        return githubRepoGraphPackageStroke(d, record);
+      })
+      .attr("stroke-width", (d) => {
+        const record = d.key ? githubRepoVulnStatus[d.key] || null : null;
+        return githubRepoGraphPackageStrokeWidth(d, record);
+      });
+
+    packageNodes.select("title").text((d) => {
+      const record = d.key ? githubRepoVulnStatus[d.key] || null : null;
+      return [
+        `${githubPackageLabel(d.pkg)}${d.pkg.version ? `@${d.pkg.version}` : ""}`,
+        pmDisplayNames[d.pkg.manager] || d.pkg.manager,
+        githubRepoRiskLabel(record),
+      ]
+        .filter(Boolean)
+        .join(" - ");
+    });
+  }, [
+    githubRepoVulnStatus,
+    appearanceMode,
+    selectedGithubRepoPackageKey,
+    githubRepoGraphPackageSignature,
+  ]);
+
   const selectPackageTypeaheadItem = (pkg) => {
     if (!pkg) return;
     applyPackageSuggestion(pkg);
@@ -3598,9 +5164,32 @@ function App() {
       const affected = Array.isArray(cveResult?.affected)
         ? cveResult.affected
         : [];
+      const affectedRecords = affected
+        .slice(0, 24)
+        .map((record, idx) => remediationRecordDetails(record, idx));
+      const remediationFixCount = affectedRecords.filter(
+        (record) => record.hasFix,
+      ).length;
       const references = Array.isArray(cveResult?.references)
         ? cveResult.references.filter((ref) => ref && ref.url).slice(0, 8)
         : [];
+      const sourceLabel =
+        cveResult?.database_specific?.source || (cveResult ? "OSV" : "");
+      const sourceNote = cveResult?.database_specific?.lookup_note || "";
+      const statusLabel =
+        cveResult?.database_specific?.status ||
+        cveResult?.database_specific?.nvd_status ||
+        "";
+      const sourceIdentifier =
+        cveResult?.database_specific?.sourceIdentifier ||
+        cveResult?.database_specific?.nvd_source ||
+        "";
+      const weaknesses = Array.isArray(cveResult?.weaknesses)
+        ? cveResult.weaknesses.filter(Boolean).slice(0, 8)
+        : [];
+      const primaryVector = Array.isArray(cveResult?.severity)
+        ? cveResult.severity.find((sev) => sev && sev.vector)?.vector
+        : "";
       const nvdUrl = /^CVE-/i.test(id)
         ? `https://nvd.nist.gov/vuln/detail/${id}`
         : "";
@@ -3629,10 +5218,12 @@ function App() {
                   className: `risk-number compact ${
                     risk ? `risk-${risk}` : ""
                   }`,
-                  title: "Highest severity found in the OSV record",
+                  title: "Highest severity found across advisory sources",
                 },
                 score.toFixed(1),
               ),
+            sourceLabel &&
+              e("span", { className: "cve-source-badge" }, sourceLabel),
             id &&
               e(
                 "a",
@@ -3672,7 +5263,7 @@ function App() {
           e(
             "div",
             { className: "cve-loading-state" },
-            "Looking up the advisory and affected packages...",
+            "Checking OSV, NVD, affected products, and references...",
           ),
         cveError &&
           e(
@@ -3689,6 +5280,67 @@ function App() {
                 },
                 " Check NVD",
               ),
+          ),
+        cveError &&
+          !cveResult &&
+          e(
+            React.Fragment,
+            null,
+            e(
+              "div",
+              { className: "cve-section-header remediation-header" },
+              e("h3", null, "Remediation"),
+              e("span", null, "Advisory data unavailable"),
+            ),
+            e(
+              "div",
+              { className: "remediation-panel" },
+              e(
+                "div",
+                { className: "remediation-summary-card" },
+                e("span", { className: "remediation-step-number" }, "1"),
+                e(
+                  "div",
+                  null,
+                  e("h4", null, "Retry authoritative sources"),
+                  e(
+                    "p",
+                    null,
+                    "The advisory source did not return details. Open NVD or OSV directly, then retry this lookup when the upstream service is reachable.",
+                  ),
+                ),
+              ),
+              e(
+                "div",
+                { className: "remediation-summary-card" },
+                e("span", { className: "remediation-step-number" }, "2"),
+                e(
+                  "div",
+                  null,
+                  e("h4", null, "Inventory possible exposure"),
+                  e(
+                    "p",
+                    null,
+                    "Identify packages, products, and deployed versions that may map to this CVE before assigning remediation work.",
+                  ),
+                ),
+              ),
+              e(
+                "div",
+                { className: "remediation-summary-card" },
+                e("span", { className: "remediation-step-number" }, "3"),
+                e(
+                  "div",
+                  null,
+                  e("h4", null, "Use temporary controls"),
+                  e(
+                    "p",
+                    null,
+                    "Prioritize exposed systems, restrict risky input paths, and monitor vendor guidance until fixed versions or workarounds are confirmed.",
+                  ),
+                ),
+              ),
+            ),
           ),
         cveResult &&
           e(
@@ -3707,6 +5359,7 @@ function App() {
                     null,
                     compactText(cveResult.details || cveResult.summary, 620),
                   ),
+                sourceNote && e("p", { className: "cve-source-note" }, sourceNote),
                 aliases.length > 0 &&
                   e(
                     "div",
@@ -3715,10 +5368,34 @@ function App() {
                       e("span", { key: alias }, alias),
                     ),
                   ),
+                weaknesses.length > 0 &&
+                  e(
+                    "div",
+                    { className: "cve-aliases cve-weaknesses" },
+                    weaknesses.map((weakness) =>
+                      e("span", { key: weakness }, weakness),
+                    ),
+                  ),
+                primaryVector &&
+                  e("code", { className: "cvss-vector" }, primaryVector),
               ),
               e(
                 "div",
                 { className: "cve-meta-panel" },
+                sourceLabel &&
+                  e(
+                    "div",
+                    null,
+                    e("span", null, "Source"),
+                    e("strong", null, sourceLabel),
+                  ),
+                statusLabel &&
+                  e(
+                    "div",
+                    null,
+                    e("span", null, "Status"),
+                    e("strong", null, statusLabel),
+                  ),
                 cveResult.published &&
                   e(
                     "div",
@@ -3740,45 +5417,137 @@ function App() {
                     e("span", null, "Severity"),
                     e("strong", null, cveResult.database_specific.severity),
                   ),
+                sourceIdentifier &&
+                  e(
+                    "div",
+                    null,
+                    e("span", null, "Reporter"),
+                    e("strong", null, sourceIdentifier),
+                  ),
                 Array.isArray(cveResult.severity) &&
                   cveResult.severity.slice(0, 3).map((sev, idx) =>
                     e(
                       "div",
                       { key: `${sev.type || "severity"}-${idx}` },
                       e("span", null, sev.type || "Score"),
-                      e("strong", null, sev.score),
+                      e(
+                        "strong",
+                        null,
+                        `${sev.score}${sev.severity ? ` ${sev.severity}` : ""}`,
+                      ),
                     ),
                   ),
               ),
             ),
             e(
               "div",
-              { className: "cve-section-header" },
-              e("h3", null, "Affected Packages"),
-              e("span", null, `${affected.length} package records`),
+              { className: "cve-section-header remediation-header" },
+              e("h3", null, "Remediation"),
+              e(
+                "span",
+                null,
+                affectedRecords.length > 0
+                  ? `${remediationFixCount} fix paths listed`
+                  : "Guidance checklist",
+              ),
             ),
-            affected.length > 0
+            e(
+              "div",
+              { className: "remediation-panel" },
+              e(
+                "div",
+                { className: "remediation-summary-card" },
+                e(
+                  "span",
+                  { className: "remediation-step-number" },
+                  "1",
+                ),
+                e(
+                  "div",
+                  null,
+                  e(
+                    "h4",
+                    null,
+                    remediationFixCount > 0
+                      ? "Upgrade impacted components"
+                      : affected.length > 0
+                        ? "Confirm affected versions"
+                        : "Determine exposure first",
+                  ),
+                  e(
+                    "p",
+                    null,
+                    remediationFixCount > 0
+                      ? "Apply the first fixed version available for each affected package, then rerun the package analyzer to verify the dependency graph is clean."
+                      : affected.length > 0
+                        ? "No fixed version is listed for every affected record. Match the published ranges against deployed versions and follow vendor guidance before rollout."
+                        : "No affected package data was published with this advisory. Use the references, NVD status, and vendor notes to identify impacted assets before making code changes.",
+                  ),
+                ),
+              ),
+              e(
+                "div",
+                { className: "remediation-summary-card" },
+                e(
+                  "span",
+                  { className: "remediation-step-number" },
+                  "2",
+                ),
+                e(
+                  "div",
+                  null,
+                  e("h4", null, "Reduce risk while patching"),
+                  e(
+                    "p",
+                    null,
+                    "Prioritize internet-facing services, restrict vulnerable input paths, and apply vendor workarounds or compensating controls until patched builds are deployed.",
+                  ),
+                ),
+              ),
+              e(
+                "div",
+                { className: "remediation-summary-card" },
+                e(
+                  "span",
+                  { className: "remediation-step-number" },
+                  "3",
+                ),
+                e(
+                  "div",
+                  null,
+                  e("h4", null, "Verify and monitor"),
+                  e(
+                    "p",
+                    null,
+                    "Rebuild lockfiles or manifests, redeploy, scan again, and monitor OSV/NVD references for late-breaking fixed versions or scope changes.",
+                  ),
+                ),
+              ),
+            ),
+            e(
+              "div",
+              { className: "cve-section-header" },
+              e("h3", null, "Affected Packages & Fix Guidance"),
+              e("span", null, `${affectedRecords.length} package records`),
+            ),
+            affectedRecords.length > 0
               ? e(
                   "div",
                   { className: "affected-package-grid" },
-                  affected.slice(0, 24).map((record, idx) => {
-                    const details = affectedPackageDetails(record);
-                    const fixed = affectedFixedVersions(record).slice(0, 4);
-                    const versionCount = Array.isArray(record.versions)
-                      ? record.versions.length
+                  affectedRecords.map((record) => {
+                    const details = record.details;
+                    const display = record.display;
+                    const versionSummaries = record.versionSummaries;
+                    const versionForLink = record.versionForLink;
+                    const versionCount = Array.isArray(record.affected.versions)
+                      ? record.affected.versions.length
                       : 0;
-                    const localLink = details
-                      ? buildPackageDeepLink({
-                          manager: details.manager,
-                          namespace: details.namespace,
-                          name: details.name,
-                          version: "",
-                        })
-                      : "";
+                    const externalPackageLink =
+                      display.collectionURL || display.repo || "";
                     return e(
                       "article",
                       {
-                        key: `${details?.packageName || "affected"}-${idx}`,
+                        key: record.key,
                         className: "affected-package-card",
                       },
                       e(
@@ -3787,36 +5556,159 @@ function App() {
                         e(
                           "strong",
                           null,
-                          details?.packageName ||
-                            record.package?.name ||
-                            "Unknown package",
+                          display.packageName || "Unknown package",
                         ),
                         e(
                           "span",
                           null,
-                          details?.managerLabel ||
-                            record.package?.ecosystem ||
-                            "Unsupported",
+                          display.managerLabel || "Unsupported",
+                        ),
+                        e(
+                          "span",
+                          {
+                            className: record.hasFix
+                              ? "remediation-status remediation-status-fixed"
+                              : "remediation-status remediation-status-review",
+                          },
+                          record.hasFix ? "Fix available" : "Review range",
                         ),
                       ),
                       e(
                         "div",
                         { className: "affected-package-meta" },
                         versionCount > 0 &&
-                          e("span", null, `${versionCount} affected versions`),
-                        fixed.length > 0
-                          ? e("span", null, `Fixed in ${fixed.join(", ")}`)
-                          : e("span", null, "No fixed version listed"),
+                          e(
+                            "span",
+                            { className: "affected-version-chip" },
+                            `${versionCount} affected versions`,
+                          ),
+                        versionSummaries.map((summary) => {
+                          const summaryVersion =
+                            versionFromAffectedSummary(summary) || versionForLink;
+                          if (details && summaryVersion) {
+                            const summaryLink = buildPackageDeepLink({
+                              manager: details.manager,
+                              namespace: details.namespace,
+                              name: details.name,
+                              version: summaryVersion,
+                            });
+                            return e(
+                              "a",
+                              {
+                                key: summary,
+                                className:
+                                  "affected-version-chip affected-version-link",
+                                href: summaryLink,
+                                title: `Analyze ${display.packageName} ${summaryVersion}`,
+                                onClick: (event) => {
+                                  event.preventDefault();
+                                  analyzeAffectedPackage(
+                                    record.affected,
+                                    summaryVersion,
+                                  );
+                                },
+                              },
+                              summary,
+                            );
+                          }
+                          if (externalPackageLink) {
+                            return e(
+                              "a",
+                              {
+                                key: summary,
+                                className:
+                                  "affected-version-chip affected-version-link",
+                                href: externalPackageLink,
+                                target: "_blank",
+                                rel: "noopener noreferrer",
+                                title:
+                                  "Open package source because the local explorer does not support this ecosystem",
+                              },
+                              summary,
+                            );
+                          }
+                          return e(
+                            "span",
+                            {
+                              key: summary,
+                              className: "affected-version-chip",
+                              title:
+                                "Package explorer unavailable for this ecosystem",
+                            },
+                            summary,
+                          );
+                        }),
+                        record.affected.database_specific?.defaultStatus &&
+                          e(
+                            "span",
+                            { className: "affected-version-chip" },
+                            `Default ${record.affected.database_specific.defaultStatus}`,
+                          ),
                       ),
+                      e(
+                        "div",
+                        {
+                          className:
+                            "affected-package-note affected-remediation-note",
+                        },
+                        record.hasFix
+                          ? `Upgrade to ${record.fixedVersions
+                              .slice(0, 3)
+                              .join(", ")} or later where applicable.`
+                          : `Affected range: ${record.versionSummaries
+                              .slice(0, 3)
+                              .join("; ")}`,
+                      ),
+                      (display.modules.length > 0 ||
+                        display.programFiles.length > 0) &&
+                        e(
+                          "div",
+                          { className: "affected-package-note" },
+                          [
+                            display.modules.length > 0 &&
+                              `Module: ${display.modules.slice(0, 3).join(", ")}`,
+                            display.programFiles.length > 0 &&
+                              `File: ${display.programFiles
+                                .slice(0, 3)
+                                .join(", ")}`,
+                          ]
+                            .filter(Boolean)
+                            .join(" · "),
+                        ),
+                      (display.repo || display.collectionURL) &&
+                        e(
+                          "div",
+                          { className: "affected-package-links" },
+                          display.repo &&
+                            e(
+                              "a",
+                              {
+                                href: display.repo,
+                                target: "_blank",
+                                rel: "noopener noreferrer",
+                              },
+                              "Repository",
+                            ),
+                          display.collectionURL &&
+                            e(
+                              "a",
+                              {
+                                href: display.collectionURL,
+                                target: "_blank",
+                                rel: "noopener noreferrer",
+                              },
+                              "Vendor packages",
+                            ),
+                        ),
                       details
                         ? e(
                             "a",
                             {
                               className: "affected-package-action",
-                              href: localLink,
+                              href: record.localLink,
                               onClick: (event) => {
                                 event.preventDefault();
-                                analyzeAffectedPackage(record);
+                                analyzeAffectedPackage(record.affected);
                               },
                             },
                             "Analyze package",
@@ -3832,7 +5724,7 @@ function App() {
               : e(
                   "div",
                   { className: "empty-dependencies security-empty" },
-                  "OSV did not list affected packages for this advisory.",
+                  "No affected package or product records were published by OSV or NVD.",
                 ),
             references.length > 0 &&
               e(
@@ -4040,7 +5932,16 @@ function App() {
         ),
         consoleLines.length > 0 &&
           showConsole &&
-          e("pre", { className: "console-box" }, consoleLines.join("\n")),
+          e(
+            "pre",
+            {
+              ref: consoleBoxRef,
+              className: "console-box",
+              "aria-live": "polite",
+              "aria-label": "Request console output",
+            },
+            consoleLines.join("\n"),
+          ),
       ),
 
     e(
@@ -4103,112 +6004,33 @@ function App() {
                   alerts.map((msg, i) => e("div", { key: i }, msg))
                 ),
             ),
-              e(
-                "span",
-                {
-                  className: "palette-icon-container",
-                },
-                e("img", {
-                  src: "icons/palette.svg",
-                  className: "palette-icon",
-                  onClick: () => setShowPalette((v) => !v),
-                }),
-                showPalette &&
-                  ReactDOM.createPortal(
-                    e(
-                      "div",
-                      { className: "palette-box", ref: paletteRef },
-                    [
-                    ["R", 255],
-                    ["G", 255],
-                    ["B", 255],
-                  ].map(([label, max], idx) =>
-                    e(
-                      "label",
-                      { key: label },
-                      `${label}: ${bgSettings[label.toLowerCase()]}`,
-                      e("input", {
-                        type: "range",
-                        min: 0,
-                        max: max,
-                        value: bgSettings[label.toLowerCase()],
-                        onChange: (ev) =>
-                          setBgSettings((s) => ({
-                            ...s,
-                            [label.toLowerCase()]: Number(ev.target.value),
-                          })),
-                      })
-                    )
+            e(
+              "button",
+              {
+                type: "button",
+                className: "theme-toggle-button",
+                onClick: () =>
+                  setAppearanceMode((mode) =>
+                    mode === "dark" ? "light" : "dark",
                   ),
-                  e(
-                    "label",
-                    null,
-                    `Opacity: ${bgSettings.opacity}`,
-                    e("input", {
-                      type: "range",
-                      min: 0,
-                      max: 1,
-                      step: 0.05,
-                      value: bgSettings.opacity,
-                      onChange: (ev) =>
-                        setBgSettings((s) => ({
-                          ...s,
-                          opacity: parseFloat(ev.target.value),
-                        })),
-                    })
-                  ),
-                  e(
-                    "label",
-                    null,
-                    `Background Brightness: ${bgSettings.brightness}`,
-                    e("input", {
-                      type: "range",
-                      min: MIN_BRIGHTNESS,
-                      max: 150,
-                      value: bgSettings.brightness,
-                      onChange: (ev) =>
-                        setBgSettings((s) => ({
-                          ...s,
-                          brightness: Math.max(
-                            MIN_BRIGHTNESS,
-                            Number(ev.target.value)
-                          ),
-                        })),
-                    })
-                  ),
-                  e(
-                    "label",
-                    null,
-                    `Item Transparency: ${Math.round(
-                      (1 - bgSettings.elementOpacity) * 100
-                    )}%`,
-                    e("input", {
-                      type: "range",
-                      min: 0.9,
-                      max: 1,
-                      step: 0.01,
-                      value: bgSettings.elementOpacity,
-                      onChange: (ev) =>
-                        setBgSettings((s) => ({
-                          ...s,
-                          elementOpacity: parseFloat(ev.target.value),
-                        })),
-                    })
-                  ),
-                  e(
-                    "button",
-                    {
-                      type: "button",
-                      onClick: () => {
-                          saveBgSettings();
-                          setShowPalette(false);
-                        },
-                      },
-                    "Save"
-                  )
-                ),
-                document.body
-              )
+                "aria-label":
+                  appearanceMode === "dark"
+                    ? "Switch to light mode"
+                    : "Switch to dark mode",
+                "aria-pressed": appearanceMode === "dark",
+                title:
+                  appearanceMode === "dark"
+                    ? "Switch to light mode"
+                    : "Switch to dark mode",
+              },
+              e("img", {
+                src:
+                  appearanceMode === "dark"
+                    ? "icons/sun.svg"
+                    : "icons/moon.svg",
+                alt: "",
+                className: "theme-toggle-icon",
+              }),
             ),
           ),
           e("br"),
@@ -4240,6 +6062,17 @@ function App() {
                 onClick: () => setSearchMode("cve"),
               },
               "CVE",
+            ),
+            e(
+              "button",
+              {
+                type: "button",
+                role: "tab",
+                "aria-selected": searchMode === "repository",
+                className: searchMode === "repository" ? "active" : "",
+                onClick: () => setSearchMode("repository"),
+              },
+              "Repository",
             ),
           ),
           e(
@@ -4429,81 +6262,6 @@ function App() {
                 ),
               ),
             ),
-          ),
-        ),
-          e(
-            "div",
-            {
-              className: "cve-search-shell",
-              style: { display: searchMode === "cve" ? "" : "none" },
-            },
-            e(
-              "div",
-              { className: "cve-search-row" },
-              e(
-                "div",
-                { className: "input-container cve-input-container" },
-                e("input", {
-                  placeholder: "CVE-2024-3094",
-                  value: cveQuery,
-                  onChange: (event) => {
-                    setCveQuery(event.target.value);
-                    if (cveError) setCveError("");
-                  },
-                }),
-                cveQuery &&
-                  e(
-                    "button",
-                    {
-                      type: "button",
-                      className: "clear-btn",
-                      onClick: () => setCveQuery(""),
-                    },
-                    "\u00d7",
-                  ),
-                e(
-                  "div",
-                  { className: "input-tooltip" },
-                  "paste a CVE, OSV, or GHSA advisory ID",
-                ),
-              ),
-              e(
-                "div",
-                { className: "form-actions cve-form-actions" },
-                e(
-                  "button",
-                  {
-                    type: "submit",
-                    className: "fetch-button",
-                    disabled: cveLoading || !extractAdvisoryId(cveQuery),
-                  },
-                  cveLoading ? "Looking up..." : "Look up",
-                ),
-                e(
-                  "button",
-                  {
-                    type: "button",
-                    className: "clear-form-button",
-                    onClick: clearForm,
-                    disabled: !hasClearableFormState,
-                    title: "Clear CVE search and results",
-                  },
-                  "Clear",
-                ),
-              ),
-            ),
-            e(
-              "p",
-              { className: "search-helper-copy" },
-              "Search by advisory ID to see affected packages, references, severity, and package-analysis deep links.",
-            ),
-          ),
-          e(
-            "div",
-            {
-              className: "search-row",
-              style: { display: searchMode === "package" ? "" : "none" },
-            },
             cacheStatus &&
               e(
                 "div",
@@ -4597,121 +6355,527 @@ function App() {
                   )
               : null,
           ),
+          ),
           e(
             "div",
-            { className: "github-import" },
+            {
+              className: "cve-search-shell",
+              style: { display: searchMode === "cve" ? "" : "none" },
+            },
             e(
               "div",
-              { className: "github-import-row" },
-              e("input", {
-                placeholder: "GitHub repo URL",
-                value: githubRepoUrl,
-                onChange: (event) => {
-                  setGithubRepoUrl(event.target.value);
-                  if (githubRepoError) setGithubRepoError("");
-                },
-                onKeyDown: (event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    importGithubRepoDependencies(event);
-                  }
-                },
-              }),
-              e(
-                "button",
-                {
-                  type: "button",
-                  className: "repo-import-button",
-                  onClick: importGithubRepoDependencies,
-                  disabled: githubRepoLoading || !githubRepoUrl.trim(),
-                },
-                githubRepoLoading ? "Importing..." : "Import repo",
-              ),
-            ),
-            githubRepoError &&
-              e("div", { className: "github-import-error" }, githubRepoError),
-            githubRepoResult &&
+              { className: "cve-search-row" },
               e(
                 "div",
-                { className: "github-import-results" },
+                { className: "input-container cve-input-container" },
+                e("input", {
+                  placeholder: "CVE-2024-3094",
+                  value: cveQuery,
+                  onChange: (event) => {
+                    setCveQuery(event.target.value);
+                    if (cveError) setCveError("");
+                  },
+                }),
+                cveQuery &&
+                  e(
+                    "button",
+                    {
+                      type: "button",
+                      className: "clear-btn",
+                      onClick: () => setCveQuery(""),
+                    },
+                    "\u00d7",
+                  ),
                 e(
                   "div",
-                  { className: "github-import-summary" },
-                  e(
-                    "div",
-                    null,
-                    e("strong", null, githubRepoResult.repository),
-                    ` dependency graph`,
-                  ),
-                  e(
-                    "div",
-                    { className: "github-import-stats" },
-                    e("span", null, `${githubRepoResult.package_count} supported`),
-                    githubRepoResult.unsupported_count > 0 &&
-                      e(
-                        "span",
-                        null,
-                        `${githubRepoResult.unsupported_count} skipped`,
-                      ),
-                    Object.entries(githubRepoManagerCounts).map(([mgr, count]) =>
-                      e(
-                        "span",
-                        { key: `repo-count-${mgr}` },
-                        `${pmDisplayNames[mgr] || mgr}: ${count}`,
-                      ),
-                    ),
-                  ),
+                  { className: "input-tooltip" },
+                  "paste a CVE, OSV, or GHSA advisory ID",
                 ),
+              ),
+              e(
+                "div",
+                { className: "form-actions cve-form-actions" },
+                e(
+                  "button",
+                  {
+                    type: "submit",
+                    className: "fetch-button",
+                    disabled: cveLoading || !extractAdvisoryId(cveQuery),
+                  },
+                  cveLoading ? "Looking up..." : "Look up",
+                ),
+                e(
+                  "button",
+                  {
+                    type: "button",
+                    className: "clear-form-button",
+                    onClick: clearForm,
+                    disabled: !hasClearableFormState,
+                    title: "Clear CVE search and results",
+                  },
+                  "Clear",
+                ),
+              ),
+            ),
+            e(
+              "p",
+              { className: "search-helper-copy" },
+            "Search by advisory ID to see affected packages, references, severity, and package-analysis deep links.",
+            ),
+          ),
+          e(
+            "div",
+            {
+              className: "repository-search-shell",
+              style: { display: searchMode === "repository" ? "" : "none" },
+            },
+            e(
+              "div",
+              { className: "github-import" },
+              e(
+                "div",
+                { className: "github-import-row" },
                 e("input", {
-                  className: "github-package-filter",
-                  placeholder: "Filter imported dependencies",
-                  value: githubRepoFilter,
-                  onChange: (event) => setGithubRepoFilter(event.target.value),
+                  placeholder: "GitHub repo URL",
+                  value: githubRepoUrl,
+                  onChange: (event) => {
+                    setGithubRepoUrl(event.target.value);
+                    if (githubRepoError) setGithubRepoError("");
+                  },
+                  onKeyDown: (event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      importGithubRepoDependencies(event);
+                    }
+                  },
                 }),
                 e(
+                  "button",
+                  {
+                    type: "button",
+                    className: "repo-import-button",
+                    onClick: importGithubRepoDependencies,
+                    disabled: githubRepoLoading || !githubRepoUrl.trim(),
+                  },
+                  githubRepoLoading ? "Importing..." : "Import repo",
+                ),
+              ),
+              e(
+                "p",
+                { className: "search-helper-copy" },
+                "Import a GitHub dependency graph, then choose any supported package for deeper analysis.",
+              ),
+              githubRepoError &&
+                e("div", { className: "github-import-error" }, githubRepoError),
+              githubRepoResult &&
+                e(
                   "div",
-                  { className: "github-package-grid" },
-                  visibleGithubRepoPackages.map((pkg) =>
+                  { className: "github-import-results" },
+                  e(
+                    "div",
+                    { className: "github-import-summary" },
                     e(
-                      "button",
-                      {
-                        key: `${pkg.purl}-${pkg.spdx_id || ""}`,
-                        type: "button",
-                        className: "github-package-card",
-                        onClick: () => analyzeGithubDependency(pkg),
-                        title: pkg.purl,
-                      },
-                      e(
-                        "span",
-                        { className: "github-package-main" },
-                        e("span", { className: "github-package-name" }, githubPackageLabel(pkg)),
-                        e(
-                          "span",
-                          { className: "github-package-version" },
-                          pkg.version || "latest",
-                        ),
+                      "div",
+                      null,
+                      e("strong", null, githubRepoResult.repository),
+                      ` dependency graph`,
+                    ),
+                    e(
+                      "div",
+                      { className: "github-import-stats" },
+                      githubRepoSummaryFilterButton(
+                        "all",
+                        `${githubRepoResult.package_count} supported`,
+                        {
+                          title: "Show all supported packages in this repository import",
+                        },
                       ),
-                      e(
-                        "span",
-                        { className: "github-package-manager" },
-                        pmDisplayNames[pkg.manager] || pkg.manager,
+                      githubRepoResult.unsupported_count > 0 &&
+                        githubRepoSummaryFilterButton(
+                          "skipped",
+                          `${githubRepoResult.unsupported_count} skipped`,
+                          {
+                            title:
+                              "Show skipped dependencies counted by GitHub but unavailable in the supported package graph",
+                          },
+                        ),
+                      githubRepoVulnLoading &&
+                        githubRepoSummaryStatus(
+                          githubRepoVulnProgress || "Checking OSV",
+                        ),
+                      !githubRepoVulnLoading &&
+                        githubRepoVulnProgress &&
+                        githubRepoSummaryFilterButton(
+                          githubRepoVulnerableCount > 0
+                            ? "osv-findings"
+                            : "checked",
+                          githubRepoVulnProgress,
+                          {
+                            key: "repo-osv-progress-filter",
+                            risk: githubRepoVulnerableCount > 0,
+                            title:
+                              githubRepoVulnerableCount > 0
+                                ? "Show packages with OSV advisories"
+                                : "Show packages with completed OSV checks",
+                          },
+                        ),
+                      githubRepoVulnerableCount > 0 &&
+                        githubRepoSummaryFilterButton(
+                          "vulnerable",
+                          `${githubRepoVulnerableCount} vulnerable`,
+                          {
+                            risk: true,
+                            title: "Show vulnerable packages",
+                          },
+                        ),
+                      githubRepoHighRiskCount > 0 &&
+                        githubRepoSummaryFilterButton(
+                          "high",
+                          `${githubRepoHighRiskCount} high or critical`,
+                          {
+                            risk: true,
+                            high: true,
+                            title: "Show high and critical vulnerable packages",
+                          },
+                        ),
+                      githubRepoCheckedCount > 0 &&
+                        githubRepoSummaryFilterButton(
+                          "checked",
+                          `${githubRepoCheckedCount} OSV checked`,
+                          { title: "Show packages with completed OSV checks" },
+                        ),
+                      Object.entries(githubRepoManagerCounts).map(([mgr, count]) =>
+                        githubRepoSummaryFilterButton(
+                          `manager:${mgr}`,
+                          `${pmDisplayNames[mgr] || mgr}: ${count}`,
+                          {
+                            key: `repo-count-${mgr}`,
+                            title: `Show ${pmDisplayNames[mgr] || mgr} packages`,
+                          },
+                        ),
                       ),
                     ),
                   ),
+                  e(
+                    "div",
+                    { className: "github-import-layout" },
+                    e(
+                      "section",
+                      {
+                        className: "github-package-list-panel",
+                        "aria-label": "Imported packages",
+                      },
+                      e(
+                        "div",
+                        { className: "github-package-list-header" },
+                        e(
+                          "div",
+                          null,
+                          e("strong", null, "Packages"),
+                          e(
+                            "span",
+                            null,
+                            `${filteredGithubRepoPackages.length} shown`,
+                          ),
+                        ),
+                        e(
+                          "span",
+                          { className: "github-package-list-count" },
+                          `${githubRepoPackages.length} total`,
+                        ),
+                      ),
+                      e("input", {
+                        className: "github-package-filter",
+                        placeholder: "Filter imported dependencies",
+                        value: githubRepoFilter,
+                        onChange: (event) => setGithubRepoFilter(event.target.value),
+                      }),
+                      e(
+                        "div",
+                        { className: "github-package-list" },
+                        visibleGithubRepoPackages.map((pkg, index) => {
+                          const packageKey = githubRepoPackageKey(pkg);
+                          const vulnRecord = githubRepoPackageVulnRecord(pkg);
+                          const riskClass = githubRepoPackageRiskClass(vulnRecord);
+                          const isSelected =
+                            packageKey && packageKey === selectedGithubRepoPackageKey;
+                          return e(
+                            "button",
+                            {
+                              key:
+                                packageKey ||
+                                `${pkg.manager || "pkg"}-${pkg.name || "dependency"}-${index}`,
+                              type: "button",
+                              className: `github-package-card${riskClass}${
+                                isSelected ? " selected" : ""
+                              }`,
+                              onClick: () => setSelectedGithubRepoPackage(pkg),
+                              title: pkg.purl || githubPackageLabel(pkg),
+                              "aria-pressed": isSelected,
+                            },
+                            e(
+                              "span",
+                              { className: "github-package-main" },
+                              e(
+                                "span",
+                                { className: "github-package-name" },
+                                githubPackageLabel(pkg),
+                              ),
+                              e(
+                                "span",
+                                { className: "github-package-version" },
+                                pkg.version || "latest",
+                              ),
+                              vulnRecord?.status === "vulnerable" &&
+                                e(
+                                  "span",
+                                  {
+                                    className: `github-package-risk-badge${riskClass}`,
+                                    title: githubRepoRiskLabel(vulnRecord),
+                                  },
+                                  githubRepoRiskLabel(vulnRecord),
+                                ),
+                            ),
+                            e(
+                              "span",
+                              { className: "github-package-manager" },
+                              pmDisplayNames[pkg.manager] || pkg.manager,
+                            ),
+                          );
+                        }),
+                      ),
+                      filteredGithubRepoPackages.length > visibleGithubRepoPackages.length &&
+                        e(
+                          "div",
+                          { className: "github-import-more" },
+                          `Showing ${visibleGithubRepoPackages.length} of ${filteredGithubRepoPackages.length}. Narrow the filter to see more.`,
+                        ),
+                      filteredGithubRepoPackages.length === 0 &&
+                        e(
+                          "div",
+                          { className: "github-import-empty" },
+                          githubRepoFilterEmptyMessage,
+                        ),
+                    ),
+                    e(
+                      "section",
+                      {
+                        className: `github-repo-graph-panel${
+                          githubRepoGraphExpanded ? " expanded" : ""
+                        }`,
+                        "aria-label": "Repository dependency graph",
+                      },
+                      e(
+                        "div",
+                        { className: "github-repo-graph-header" },
+                        e(
+                          "div",
+                          null,
+                          e("strong", null, "Dependency graph"),
+                          e(
+                            "span",
+                            null,
+                            "Repository, ecosystems, and imported packages",
+                          ),
+                        ),
+                        e(
+                          "div",
+                          { className: "github-repo-graph-toolbar" },
+                          e(
+                            "button",
+                            {
+                              type: "button",
+                              className: "repo-graph-action-button",
+                              onClick: () =>
+                                setGithubRepoGraphExpanded((expanded) => !expanded),
+                              "aria-pressed": githubRepoGraphExpanded,
+                              title: githubRepoGraphExpanded
+                                ? "Return the graph to the repository panel"
+                                : "Expand the graph to the full site workspace",
+                            },
+                            githubRepoGraphExpanded ? "Collapse" : "Expand",
+                          ),
+                          e(
+                            "button",
+                            {
+                              type: "button",
+                              className: `repo-graph-action-button${
+                                githubRepoTransitiveLoading ? " danger" : " primary"
+                              }`,
+                              onClick: githubRepoTransitiveLoading
+                                ? cancelGithubRepoTransitiveDependencies
+                                : resolveGithubRepoTransitiveDependencies,
+                              disabled:
+                                !githubRepoTransitiveLoading &&
+                                githubRepoTransitiveRootCandidates.length === 0,
+                              title:
+                                githubRepoTransitiveRootCandidates.length === 0
+                                  ? "No visible packages have exact versions to resolve"
+                                  : "Resolve transitive dependencies for the visible package set",
+                            },
+                            githubRepoTransitiveLoading
+                              ? "Cancel transitive"
+                              : githubRepoTransitiveNodeCount > 0
+                                ? "Resolve more"
+                                : "Resolve transitive",
+                          ),
+                          githubRepoTransitiveNodeCount > 0 &&
+                            !githubRepoTransitiveLoading &&
+                            e(
+                              "button",
+                              {
+                                type: "button",
+                                className: "repo-graph-action-button",
+                                onClick: clearGithubRepoTransitiveDependencies,
+                                title: "Remove resolved transitive nodes from the graph",
+                              },
+                              "Clear",
+                            ),
+                          e(
+                            "span",
+                            { className: "github-package-list-count" },
+                            `${formatNumber(githubRepoGraphNodeCount)} nodes`,
+                          ),
+                        ),
+                      ),
+                      (githubRepoTransitiveProgress ||
+                        githubRepoTransitiveError ||
+                        githubRepoTransitiveNodeCount > 0) &&
+                        e(
+                          "div",
+                          {
+                            className: `github-repo-graph-status${
+                              githubRepoTransitiveError ? " warning" : ""
+                            }`,
+                          },
+                          githubRepoTransitiveProgress ||
+                            `${formatNumber(
+                              githubRepoTransitiveNodeCount,
+                            )} transitive nodes resolved`,
+                          githubRepoTransitiveError &&
+                            e("span", null, githubRepoTransitiveError),
+                        ),
+                      e("svg", {
+                        ref: repoGraphRef,
+                        className: "github-repo-graph",
+                        role: "img",
+                        "aria-label": `${githubRepoResult.repository} dependency graph`,
+                      }),
+                      previewGithubRepoPackage
+                        ? e(
+                            "div",
+                            {
+                              className: `github-package-detail${githubRepoPackageRiskClass(
+                                previewGithubRepoVuln,
+                              )}`,
+                            },
+                            e(
+                              "div",
+                              { className: "github-package-detail-header" },
+                              e(
+                                "div",
+                                { className: "github-package-detail-heading" },
+                                e(
+                                  "span",
+                                  { className: "github-package-detail-kicker" },
+                                  "Selected package",
+                                ),
+                                e(
+                                  "strong",
+                                  { className: "github-package-detail-title" },
+                                  githubPackageLabel(previewGithubRepoPackage),
+                                ),
+                              ),
+                              e(
+                                "span",
+                                { className: "github-package-manager" },
+                                pmDisplayNames[previewGithubRepoPackage.manager] ||
+                                  previewGithubRepoPackage.manager,
+                              ),
+                            ),
+                            e(
+                              "div",
+                              { className: "github-package-detail-meta" },
+                              e(
+                                "div",
+                                { className: "github-package-detail-item" },
+                                e(
+                                  "span",
+                                  { className: "github-package-detail-label" },
+                                  "Version",
+                                ),
+                                e(
+                                  "strong",
+                                  { className: "github-package-detail-value" },
+                                  previewGithubRepoPackage.version || "latest",
+                                ),
+                              ),
+                              e(
+                                "div",
+                                { className: "github-package-detail-item" },
+                                e(
+                                  "span",
+                                  { className: "github-package-detail-label" },
+                                  "Security",
+                                ),
+                                e(
+                                  "strong",
+                                  {
+                                    className: previewGithubRepoVuln?.status
+                                      ? `github-package-security-pill${githubRepoPackageRiskClass(
+                                          previewGithubRepoVuln,
+                                        )}`
+                                      : "github-package-security-pill",
+                                  },
+                                  githubRepoRiskLabel(previewGithubRepoVuln) ||
+                                    (githubRepoVulnLoading
+                                      ? "Checking OSV"
+                                      : "Not checked"),
+                                ),
+                              ),
+                              e(
+                                "div",
+                                {
+                                  className:
+                                    "github-package-detail-item github-package-detail-item-wide",
+                                },
+                                e(
+                                  "span",
+                                  { className: "github-package-detail-label" },
+                                  "Package URL",
+                                ),
+                                e(
+                                  "code",
+                                  { className: "github-package-detail-code" },
+                                  previewGithubRepoPackage.purl || "Unavailable",
+                                ),
+                              ),
+                            ),
+                            e(
+                              "div",
+                              { className: "github-package-detail-actions" },
+                              e(
+                                "button",
+                                {
+                                  type: "button",
+                                  className:
+                                    "repo-import-button github-package-detail-button",
+                                  onClick: () =>
+                                    analyzeGithubDependency(previewGithubRepoPackage),
+                                },
+                                "Analyze package",
+                              ),
+                            ),
+                          )
+                        : e(
+                            "div",
+                            { className: "github-package-detail-empty" },
+                            "Select a package to preview package details.",
+                          ),
+                    ),
+                  ),
                 ),
-                filteredGithubRepoPackages.length > visibleGithubRepoPackages.length &&
-                  e(
-                    "div",
-                    { className: "github-import-more" },
-                    `Showing ${visibleGithubRepoPackages.length} of ${filteredGithubRepoPackages.length}. Narrow the filter to see more.`,
-                  ),
-                filteredGithubRepoPackages.length === 0 &&
-                  e(
-                    "div",
-                    { className: "github-import-empty" },
-                    "No imported dependencies match this filter.",
-                  ),
-              ),
+            ),
           ),
           // hidden submit button to allow pressing Enter
           e(
@@ -4727,7 +6891,7 @@ function App() {
       ),
     ),
       cvePanel,
-      showResults &&
+      showPackageResults &&
         e(
           "div",
           { className: "graph-row" },
@@ -4776,7 +6940,7 @@ function App() {
                 e("br"),
           depLists,
         ),
-        formSubmitted &&
+        showPackageResults &&
           e(
             "div",
             {

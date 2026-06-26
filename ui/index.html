@@ -5,28 +5,43 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OSS Dependency Explorer</title>
+    <link rel="icon" href="icons/globe.svg" type="image/svg+xml" />
     <script src="vendor/react.production.min.js"></script>
     <script src="vendor/react-dom.production.min.js"></script>
     <script src="vendor/d3.v7.min.js"></script>
 
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Roboto:300,400,500,700&display=swap"
-    />
-    <link rel="stylesheet" href="theme.css?v=20260616-1" />
+    <link rel="stylesheet" href="theme.css?v=20260626-04" />
   </head>
   <body>
     <div id="app"></div>
-    <script src="app.js?v=20260616-1"></script>
+    <script src="app.js?v=20260626-04"></script>
 
-    <footer class="page-footer">
-      <a
-        href="https://github.com/stevologic"
-        target="_blank"
-        rel="noopener noreferrer"
-      >
-        GitHub
-      </a>
+    <footer class="page-footer" aria-label="Site footer">
+      <div class="footer-content">
+        <p class="footer-brand">
+          <strong>OSS Dependency Explorer</strong>
+          <span>&copy; 2026</span>
+        </p>
+        <nav class="footer-links" aria-label="Footer links">
+          <a
+            href="https://github.com/stevologic"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            GitHub
+          </a>
+          <a href="https://osv.dev/" target="_blank" rel="noopener noreferrer">
+            OSV
+          </a>
+          <a
+            href="https://scorecard.dev/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            OpenSSF Scorecard
+          </a>
+        </nav>
+      </div>
     </footer>
   </body>
 </html>
