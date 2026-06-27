@@ -280,6 +280,12 @@ function App() {
   const [versionRisk, setVersionRisk] = React.useState({});
   const versionRiskCacheRef = React.useRef(new Map());
   const [deps, setDeps] = React.useState([]);
+  const [packageChainDeps, setPackageChainDeps] = React.useState({});
+  const [packageChainLoading, setPackageChainLoading] = React.useState(false);
+  const [packageChainActiveKey, setPackageChainActiveKey] = React.useState("");
+  const [packageChainProgress, setPackageChainProgress] = React.useState("");
+  const [packageChainError, setPackageChainError] = React.useState("");
+  const packageChainAbortRef = React.useRef(null);
   const [history, setHistory] = React.useState([]);
   const [nameSuggestions, setNameSuggestions] = React.useState([]);
   const [packageTypeaheadOpen, setPackageTypeaheadOpen] =
@@ -335,6 +341,12 @@ function App() {
   const labelsRef = React.useRef(null);
   const centeredRef = React.useRef(false);
   const graphSizeRef = React.useRef({ width: 0, height: 0 });
+  const packageGraphPositionsRef = React.useRef({
+    height: 0,
+    positions: new Map(),
+    width: 0,
+  });
+  const packageGraphFitSignatureRef = React.useRef("");
   const repoGraphRef = React.useRef(null);
   const [graphResizeKey, setGraphResizeKey] = React.useState(0);
   const uniqueFormName = React.useMemo(() => `form-${Date.now()}`, []);
@@ -375,11 +387,27 @@ function App() {
     React.useState({});
   const [githubRepoTransitiveLoading, setGithubRepoTransitiveLoading] =
     React.useState(false);
+  const [githubRepoTransitiveMode, setGithubRepoTransitiveMode] =
+    React.useState("");
+  const [githubRepoTransitiveActiveKey, setGithubRepoTransitiveActiveKey] =
+    React.useState("");
   const [githubRepoTransitiveProgress, setGithubRepoTransitiveProgress] =
     React.useState("");
   const [githubRepoTransitiveError, setGithubRepoTransitiveError] =
     React.useState("");
+  const [githubRepoTreeCollapsed, setGithubRepoTreeCollapsed] =
+    React.useState({});
   const githubRepoTransitiveAbortRef = React.useRef(null);
+  const githubRepoGraphPositionsRef = React.useRef({
+    height: 0,
+    positions: new Map(),
+    width: 0,
+  });
+  const githubRepoGraphAnchorsRef = React.useRef({
+    height: 0,
+    positions: new Map(),
+    width: 0,
+  });
   const [cveQuery, setCveQuery] = React.useState(
     initialCveDeepLink?.id || "",
   );
@@ -412,6 +440,45 @@ function App() {
       addConsoleLines(`> ${method} ${url}`);
     }
     return fetch(url, opts);
+  };
+
+  const normalizePackageVersion = (value) =>
+    String(value || "")
+      .trim()
+      .replace(/^v(?=\d)/i, "");
+
+  const packageHasExactVersion = (value) => {
+    const versionValue = normalizePackageVersion(value);
+    return Boolean(
+      versionValue &&
+        versionValue.toLowerCase() !== "latest" &&
+        !/[<>=*|,\s]/.test(versionValue),
+    );
+  };
+
+  const packageDependencyApiUrl = (
+    mgr,
+    nsVal,
+    nameVal,
+    versionValue,
+    { recursive = true, vuln = true, scorecard = true } = {},
+  ) => {
+    const versionPart = normalizePackageVersion(versionValue);
+    if (!mgr || !nameVal || !packageHasExactVersion(versionPart)) return "";
+    const enc = encodeURIComponent;
+    const base = `${apiOrigin}/api/dependencies/${enc(mgr)}`;
+    let path = "";
+    if (mgr === "go") {
+      const modulePath = nsVal ? `${nsVal}/${nameVal}` : nameVal;
+      path = `${base}/${modulePath.split("/").map(enc).join("/")}/${enc(versionPart)}`;
+    } else {
+      path = nsVal
+        ? `${base}/${enc(nsVal)}/${enc(nameVal)}/${enc(versionPart)}`
+        : `${base}/${enc(nameVal)}/${enc(versionPart)}`;
+    }
+    return `${path}?recursive=${recursive ? "true" : "false"}&vuln=${
+      vuln ? "true" : "false"
+    }&scorecard=${scorecard ? "true" : "false"}`;
   };
 
   React.useLayoutEffect(() => {
@@ -1501,8 +1568,9 @@ function App() {
 
   React.useEffect(() => {
     if (!showPackageResults) return;
+    const graphDeps = mergePackageChainDeps(deps, packageChainDeps);
     const direct = {};
-    deps.forEach((d) => {
+    graphDeps.forEach((d) => {
       if (!d.transitive) direct[d.name] = d.version;
     });
     const rootRisk = rootScore !== null ? riskFromScore(rootScore) : null;
@@ -1512,10 +1580,12 @@ function App() {
       submittedName,
     );
     const rootOsvStatus = vulnerabilityStatus[rootKey] || null;
-    buildGraph(deps, rootKey || submittedName, submittedVersion, direct, rootRisk, rootOsvStatus);
+    buildGraph(graphDeps, rootKey || submittedName, submittedVersion, direct, rootRisk, rootOsvStatus);
   }, [
     showPackageResults,
     deps,
+    packageChainDeps,
+    packageChainLoading,
     submittedName,
     submittedVersion,
     submittedNamespace,
@@ -1634,6 +1704,21 @@ function App() {
       pkg?.version,
     ]
       .filter(Boolean)
+      .join("|");
+
+  const normalizeGithubRepoVersion = (value) =>
+    String(value || "")
+      .trim()
+      .replace(/^v(?=\d)/i, "");
+
+  const githubRepoPackageIdentityKey = (pkg) =>
+    [
+      pkg?.manager,
+      pkg?.namespace || "",
+      pkg?.name,
+      normalizeGithubRepoVersion(pkg?.version),
+    ]
+      .filter((part) => part !== undefined && part !== null)
       .join("|");
 
   const githubPackageSearchText = (pkg) =>
@@ -2498,6 +2583,21 @@ function App() {
     setCveError("");
     setCveSubmitted(false);
     centeredRef.current = false;
+    if (packageChainAbortRef.current) {
+      packageChainAbortRef.current.abort();
+      packageChainAbortRef.current = null;
+    }
+    setPackageChainDeps({});
+    setPackageChainLoading(false);
+    setPackageChainActiveKey("");
+    setPackageChainProgress("");
+    setPackageChainError("");
+    packageGraphPositionsRef.current = {
+      height: 0,
+      positions: new Map(),
+      width: 0,
+    };
+    packageGraphFitSignatureRef.current = "";
     setFormSubmitted(true);
     setLoading(true);
     setStatus("Determining version...");
@@ -2565,20 +2665,16 @@ function App() {
       setSubmittedNamespace(nsVal);
       setSubmittedManager(mgrVal);
 
-      const enc = encodeURIComponent;
-      const base = `${apiOrigin}/api/dependencies/${enc(mgrVal)}`;
-      let path = "";
-      if (mgrVal === "go") {
-        const modulePath = nsVal ? `${nsVal}/${nameVal}` : nameVal;
-        path = `${base}/${modulePath.split("/").map(enc).join("/")}/${enc(ver)}`;
-      } else {
-        path = nsVal
-          ? `${base}/${enc(nsVal)}/${enc(nameVal)}/${enc(ver)}`
-          : `${base}/${enc(nameVal)}/${enc(ver)}`;
-      }
-
-      const urlDirect = `${path}?recursive=false&vuln=true&scorecard=true`;
-      const urlAll = `${path}?recursive=true&vuln=true&scorecard=true`;
+      const urlDirect = packageDependencyApiUrl(mgrVal, nsVal, nameVal, ver, {
+        recursive: false,
+        vuln: true,
+        scorecard: true,
+      });
+      const urlAll = packageDependencyApiUrl(mgrVal, nsVal, nameVal, ver, {
+        recursive: true,
+        vuln: true,
+        scorecard: true,
+      });
 
       const pmUrl = pmURLs[mgrVal] || "";
       const msgs = [
@@ -2769,8 +2865,21 @@ function App() {
     }
     setGithubRepoTransitiveDeps({});
     setGithubRepoTransitiveLoading(false);
+    setGithubRepoTransitiveMode("");
+    setGithubRepoTransitiveActiveKey("");
     setGithubRepoTransitiveProgress("");
     setGithubRepoTransitiveError("");
+    setGithubRepoTreeCollapsed({});
+    githubRepoGraphPositionsRef.current = {
+      height: 0,
+      positions: new Map(),
+      width: 0,
+    };
+    githubRepoGraphAnchorsRef.current = {
+      height: 0,
+      positions: new Map(),
+      width: 0,
+    };
     try {
       const resp = await fetchInternal(
         `${apiOrigin}/api/github/dependencies?repo=${encodeURIComponent(repo)}`,
@@ -2862,6 +2971,11 @@ function App() {
         name ||
         version ||
         search ||
+        packageChainLoading ||
+        packageChainActiveKey ||
+        packageChainProgress ||
+        packageChainError ||
+        Object.keys(packageChainDeps).length > 0 ||
         cacheStatus ||
         githubRepoUrl ||
         githubRepoFilter ||
@@ -2870,9 +2984,12 @@ function App() {
         githubRepoError ||
         githubRepoGraphExpanded ||
         githubRepoTransitiveLoading ||
+        githubRepoTransitiveMode ||
+        githubRepoTransitiveActiveKey ||
         Object.keys(githubRepoTransitiveDeps).length > 0 ||
         githubRepoTransitiveProgress ||
         githubRepoTransitiveError ||
+        Object.keys(githubRepoTreeCollapsed).length > 0 ||
         cveQuery ||
         cveResult ||
         cveError,
@@ -2897,6 +3014,21 @@ function App() {
     setVersionsToShow(5);
     setNameSuggestions([]);
     setDeps([]);
+    if (packageChainAbortRef.current) {
+      packageChainAbortRef.current.abort();
+      packageChainAbortRef.current = null;
+    }
+    setPackageChainDeps({});
+    setPackageChainLoading(false);
+    setPackageChainActiveKey("");
+    setPackageChainProgress("");
+    setPackageChainError("");
+    packageGraphPositionsRef.current = {
+      height: 0,
+      positions: new Map(),
+      width: 0,
+    };
+    packageGraphFitSignatureRef.current = "";
     setHistory([]);
     setExpanded({});
     setCollapsed({});
@@ -2935,8 +3067,21 @@ function App() {
     }
     setGithubRepoTransitiveDeps({});
     setGithubRepoTransitiveLoading(false);
+    setGithubRepoTransitiveMode("");
+    setGithubRepoTransitiveActiveKey("");
     setGithubRepoTransitiveProgress("");
     setGithubRepoTransitiveError("");
+    setGithubRepoTreeCollapsed({});
+    githubRepoGraphPositionsRef.current = {
+      height: 0,
+      positions: new Map(),
+      width: 0,
+    };
+    githubRepoGraphAnchorsRef.current = {
+      height: 0,
+      positions: new Map(),
+      width: 0,
+    };
     setCveQuery("");
     setCveLoading(false);
     setCveResult(null);
@@ -2969,8 +3114,16 @@ function App() {
       },
     ];
     const links = [];
+    const linkKeys = new Set();
     const added = new Set([`${rootName}@${rootVersion}`]);
     const versionMap = {};
+    const addLink = (source, target) => {
+      if (!source || !target || source === target) return;
+      const key = `${source}->${target}`;
+      if (linkKeys.has(key)) return;
+      linkKeys.add(key);
+      links.push({ source, target });
+    };
     graphList.forEach((d) => {
       versionMap[d.name] = d.version;
     });
@@ -2990,10 +3143,10 @@ function App() {
       if (d.transitive && d.parent) {
         const pv = versionMap[d.parent] || direct[d.parent];
         if (pv) {
-          links.push({ source: `${d.parent}@${pv}`, target: id });
+          addLink(`${d.parent}@${pv}`, id);
         }
       } else {
-        links.push({ source: `${rootName}@${rootVersion}`, target: id });
+        addLink(`${rootName}@${rootVersion}`, id);
       }
     });
     const svg = d3.select("#graph");
@@ -3018,13 +3171,67 @@ function App() {
     const height = svg.node().clientHeight;
     const largeGraph = nodes.length > 55;
     const compactGraph = width < 520;
+    const chainExpandedGraph = Object.keys(packageChainDeps).length > 0;
+    const chainLoadingGraph = packageChainLoading;
+    const steadyGraph = chainLoadingGraph || chainExpandedGraph;
+    const pinExistingGraph = chainLoadingGraph;
+    const previousGraph = packageGraphPositionsRef.current || {
+      height: 0,
+      positions: new Map(),
+      width: 0,
+    };
+    const scaleX = previousGraph.width ? width / previousGraph.width : 1;
+    const scaleY = previousGraph.height ? height / previousGraph.height : 1;
+    const incomingParentPosition = new Map();
+    links.forEach((link) => {
+      if (previousGraph.positions.has(link.target)) return;
+      const parentPosition = previousGraph.positions.get(link.source);
+      if (parentPosition) incomingParentPosition.set(link.target, parentPosition);
+    });
     nodes.forEach((node) => {
+      const saved = previousGraph.positions.get(node.id);
+      if (saved) {
+        node.x = Math.max(24, Math.min(width - 24, saved.x * scaleX));
+        node.y = Math.max(24, Math.min(height - 24, saved.y * scaleY));
+        if (pinExistingGraph) {
+          node.fx = node.x;
+          node.fy = node.y;
+        }
+      } else if (node.root) {
+        node.x = width / 2;
+        node.y = height / 2;
+        if (pinExistingGraph) {
+          node.fx = node.x;
+          node.fy = node.y;
+        }
+      } else {
+        const parentPosition = incomingParentPosition.get(node.id);
+        if (parentPosition) {
+          const seed = Array.from(node.id).reduce(
+            (acc, char) => acc + char.charCodeAt(0),
+            0,
+          );
+          const angle = (seed % 360) * (Math.PI / 180);
+          const radius = chainExpandedGraph
+            ? 64 + (seed % 54)
+            : 34 + (seed % 36);
+          node.x = Math.max(
+            24,
+            Math.min(width - 24, parentPosition.x * scaleX + Math.cos(angle) * radius),
+          );
+          node.y = Math.max(
+            24,
+            Math.min(height - 24, parentPosition.y * scaleY + Math.sin(angle) * radius),
+          );
+        }
+      }
       node.labelBaseVisible =
         compactGraph ||
         (!largeGraph && !compactGraph) ||
         node.root ||
         node.risk ||
         isUnresolvedOsvStatus(node.osvStatus) ||
+        (chainExpandedGraph && nodes.length <= 120) ||
         (!compactGraph && !node.transitive);
     });
 
@@ -3039,7 +3246,7 @@ function App() {
 
     svg.call(zoom);
 
-    const zoomToFit = () => {
+    const zoomToFit = ({ minScale = 0.1 } = {}) => {
       const xs = nodes.map((n) => n.x);
       const ys = nodes.map((n) => n.y);
       const minX = Math.min(...xs);
@@ -3049,11 +3256,12 @@ function App() {
       const padding = 40;
       const contentW = maxX - minX;
       const contentH = maxY - minY;
-      const scale = Math.min(
+      const fitScale = Math.min(
         1,
         width / (contentW + padding * 2),
-        height / (contentH + padding * 2)
+        height / (contentH + padding * 2),
       );
+      const scale = Math.max(minScale, fitScale);
       const cx = (minX + maxX) / 2;
       const cy = (minY + maxY) / 2;
       const tx = width / 2 - scale * cx;
@@ -3071,6 +3279,46 @@ function App() {
       });
     };
 
+    const linkDistance = chainExpandedGraph
+      ? compactGraph
+        ? 74
+        : largeGraph
+          ? 112
+          : 146
+      : largeGraph
+        ? 90
+        : compactGraph
+          ? 44
+          : 60;
+    const chargeStrength = chainExpandedGraph
+      ? largeGraph
+        ? -340
+        : compactGraph
+          ? -130
+          : -360
+      : largeGraph
+        ? -230
+        : compactGraph
+          ? -75
+          : -120;
+    const collisionRadius = (d) => {
+      if (chainExpandedGraph && d.labelBaseVisible && !compactGraph) {
+        return Math.min(
+          largeGraph ? 64 : 88,
+          Math.max(d.root ? 42 : 38, String(d.id || "").length * (largeGraph ? 1.8 : 2.3)),
+        );
+      }
+      return largeGraph ? 24 : compactGraph ? 15 : 20;
+    };
+    const graphLabelAnchor = (d) => {
+      if (compactGraph) return "middle";
+      return (d.x || width / 2) > width / 2 ? "end" : "start";
+    };
+    const graphLabelX = (d) => {
+      if (compactGraph) return d.x;
+      return d.x + (graphLabelAnchor(d) === "end" ? -10 : 10);
+    };
+
     const simulation = d3
       .forceSimulation(nodes)
       .force(
@@ -3078,15 +3326,19 @@ function App() {
         d3
           .forceLink(links)
           .id((d) => d.id)
-          .distance(largeGraph ? 90 : compactGraph ? 44 : 60),
+          .distance(linkDistance)
+          .strength(chainExpandedGraph ? 0.56 : 1),
       )
       .force(
         "charge",
-        d3.forceManyBody().strength(largeGraph ? -230 : compactGraph ? -75 : -120),
+        d3.forceManyBody().strength(chargeStrength),
       )
-      .force("collide", d3.forceCollide(largeGraph ? 24 : compactGraph ? 15 : 20))
-      .force("center", d3.forceCenter(width / 2, height / 2))
-      .force("float", floatForce);
+      .force("collide", d3.forceCollide(collisionRadius).iterations(chainExpandedGraph ? 3 : 1))
+      .force("center", d3.forceCenter(width / 2, height / 2));
+
+    if (!steadyGraph) {
+      simulation.force("float", floatForce);
+    }
 
     const link = zoomLayer
       .append("g")
@@ -3230,7 +3482,7 @@ function App() {
       .attr("stroke-width", graphLabelStrokeWidth(compactGraph))
       .attr("stroke-linejoin", "round")
       .attr("paint-order", "stroke")
-      .attr("text-anchor", compactGraph ? "middle" : "start")
+      .attr("text-anchor", graphLabelAnchor)
       .attr("filter", `url(#${labelShadowId})`)
       .style("display", (d) => (d.labelBaseVisible ? null : "none"))
       .style("pointer-events", "auto")
@@ -3246,10 +3498,20 @@ function App() {
     nodesRef.current = node;
     labelsRef.current = label;
 
-    if (!centeredRef.current) {
+    const chainFitSignature =
+      chainExpandedGraph && !chainLoadingGraph
+        ? `${nodes.length}:${links.length}:${rootName}@${rootVersion}`
+        : "";
+    const shouldFitCompletedChain =
+      chainFitSignature &&
+      packageGraphFitSignatureRef.current !== chainFitSignature;
+
+    if (!centeredRef.current || shouldFitCompletedChain) {
       setTimeout(() => {
-        if (largeGraph || compactGraph) {
-          zoomToFit();
+        if (largeGraph || compactGraph || chainExpandedGraph) {
+          zoomToFit({
+            minScale: chainExpandedGraph && !compactGraph ? 0.72 : 0.1,
+          });
           return;
         }
         const rootNode = nodes.find((n) => n.root);
@@ -3260,14 +3522,34 @@ function App() {
           .transition()
           .duration(500)
           .call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(1));
-      }, 500);
+      }, chainExpandedGraph ? 900 : 500);
       centeredRef.current = true;
+      if (shouldFitCompletedChain) {
+        packageGraphFitSignatureRef.current = chainFitSignature;
+      }
     }
 
-    // Keep simulation running after it stabilizes
-    simulation.on("end", () => {
-      simulation.alphaTarget(0.05).restart();
-    });
+    const saveGraphPositions = () => {
+      packageGraphPositionsRef.current = {
+        height,
+        positions: new Map(
+          nodes.map((nodeItem) => [
+            nodeItem.id,
+            { x: nodeItem.x || 0, y: nodeItem.y || 0 },
+          ]),
+        ),
+        width,
+      };
+    };
+
+    if (!steadyGraph) {
+      simulation.on("end", () => {
+        saveGraphPositions();
+        simulation.alphaTarget(0.05).restart();
+      });
+    } else {
+      simulation.on("end", saveGraphPositions);
+    }
     simulation.on("tick", () => {
       link
         .attr("x1", (d) => d.source.x)
@@ -3276,8 +3558,10 @@ function App() {
         .attr("y2", (d) => d.target.y);
       node.attr("cx", (d) => d.x).attr("cy", (d) => d.y);
       label
-        .attr("x", (d) => (compactGraph ? d.x : d.x + 10))
+        .attr("text-anchor", graphLabelAnchor)
+        .attr("x", graphLabelX)
         .attr("y", (d) => (compactGraph ? d.y - 7 : d.y));
+      saveGraphPositions();
     });
   };
 
@@ -3287,6 +3571,249 @@ function App() {
         return ns ? `${ns}:${nm}` : nm;
       default:
         return ns ? `${ns}/${nm}` : nm;
+    }
+  };
+
+  const packageChainKey = (packageName, versionValue) =>
+    `${packageName}@${normalizePackageVersion(versionValue)}`;
+
+  const packageChainCandidateFromName = (packageName, versionValue) => {
+    const versionPart = normalizePackageVersion(versionValue);
+    if (!packageName || !packageHasExactVersion(versionPart)) return null;
+    const parsed = splitDeepLinkName(submittedManager, "", packageName);
+    const displayName =
+      formatPackage(submittedManager, parsed.namespace, parsed.name) ||
+      packageName;
+    const url = packageDependencyApiUrl(
+      submittedManager,
+      parsed.namespace,
+      parsed.name,
+      versionPart,
+      {
+        recursive: true,
+        vuln: includeVuln,
+        scorecard: false,
+      },
+    );
+    if (!url) return null;
+    return {
+      key: packageChainKey(displayName, versionPart),
+      manager: submittedManager,
+      namespace: parsed.namespace,
+      name: parsed.name,
+      packageName: displayName,
+      version: versionPart,
+      url,
+    };
+  };
+
+  const packageChainExpansionToDeps = (expansion) => {
+    if (!expansion || expansion.failed) return [];
+    const dependencies = expansion.dependencies || {};
+    const parents = expansion.parents || {};
+    const vulnerabilities = expansion.vulnerabilities || {};
+    const vulnerabilityStatus = expansion.vulnerabilityStatus || {};
+    const expandedDeps = [];
+    Object.entries(dependencies).forEach(([pkg, depVersion]) => {
+      if (!pkg || pkg === expansion.rootPackageName) return;
+      const parentValues = Array.isArray(parents[pkg])
+        ? parents[pkg]
+        : [parents[pkg] || ""];
+      const vulnList = Array.isArray(vulnerabilities[pkg])
+        ? vulnerabilities[pkg]
+        : [];
+      const vulnSummary = summarizeVulnerabilities(vulnList);
+      parentValues.forEach((parentValue) => {
+        const parent = parentValue || expansion.rootPackageName;
+        if (!parent || parent === pkg) return;
+        expandedDeps.push({
+          name: pkg,
+          version: depVersion,
+          transitive: true,
+          parent,
+          cves: vulnSummary.advisories,
+          vulnerabilities: vulnList,
+          risk: vulnSummary.risk,
+          maxScore: vulnSummary.maxScore,
+          osvStatus: vulnerabilityStatus[pkg] || null,
+          chainExpanded: true,
+        });
+      });
+    });
+    return expandedDeps;
+  };
+
+  const mergePackageChainDeps = (baseDeps, chainMap = packageChainDeps) =>
+    normalizeDependencyRisks([
+      ...(baseDeps || []),
+      ...Object.values(chainMap).flatMap(packageChainExpansionToDeps),
+    ]);
+
+  const collectPackageChainCandidates = (chainMap = packageChainDeps) => {
+    const candidates = new Map();
+    const addCandidate = (packageName, versionValue) => {
+      const candidate = packageChainCandidateFromName(packageName, versionValue);
+      if (!candidate) return;
+      if (candidate.packageName === formatPackage(submittedManager, submittedNamespace, submittedName)) {
+        return;
+      }
+      if (!candidates.has(candidate.key)) candidates.set(candidate.key, candidate);
+    };
+    deps.forEach((dep) => addCandidate(dep.name, dep.version));
+    Object.values(chainMap).forEach((expansion) => {
+      if (!expansion || expansion.failed) return;
+      Object.entries(expansion.dependencies || {}).forEach(([pkg, versionValue]) =>
+        addCandidate(pkg, versionValue),
+      );
+    });
+    return Array.from(candidates.values()).sort((a, b) =>
+      a.packageName.localeCompare(b.packageName) ||
+      a.version.localeCompare(b.version),
+    );
+  };
+
+  const packageChainExpansionFromResponse = (candidate, data) => ({
+    manager: candidate.manager,
+    rootPackageName: candidate.packageName,
+    rootVersion: data.resolved_version || candidate.version,
+    dependencies: data.dependencies || {},
+    parents: data.parents || {},
+    vulnerabilities: data.vulnerabilities || {},
+    vulnerabilityStatus: includeVuln ? data.vulnerability_status || {} : {},
+    failed: false,
+  });
+
+  const cancelPackageChainResolution = () => {
+    if (packageChainAbortRef.current) {
+      packageChainAbortRef.current.abort();
+      packageChainAbortRef.current = null;
+    }
+    setPackageChainLoading(false);
+    setPackageChainActiveKey("");
+    setPackageChainProgress("Dependency-chain resolution cancelled");
+  };
+
+  const clearPackageChainResolution = () => {
+    cancelPackageChainResolution();
+    setPackageChainDeps({});
+    setPackageChainProgress("");
+    setPackageChainError("");
+    packageGraphPositionsRef.current = {
+      height: 0,
+      positions: new Map(),
+      width: 0,
+    };
+    packageGraphFitSignatureRef.current = "";
+  };
+
+  const resolvePackageDependencyChains = async () => {
+    if (packageChainLoading) {
+      cancelPackageChainResolution();
+      return;
+    }
+    let resolvedMap = { ...packageChainDeps };
+    let queue = collectPackageChainCandidates(resolvedMap).filter(
+      (candidate) => !resolvedMap[candidate.key],
+    );
+    if (queue.length === 0) {
+      setPackageChainProgress(
+        collectPackageChainCandidates(resolvedMap).length === 0
+          ? "No exact-version dependency nodes are available to resolve"
+          : "Full package dependency chain is already resolved",
+      );
+      setPackageChainError("");
+      return;
+    }
+
+    const controller = new AbortController();
+    packageChainAbortRef.current = controller;
+    setPackageChainLoading(true);
+    setPackageChainActiveKey("");
+    setPackageChainError("");
+    setPackageChainProgress(`Resolving 0/${queue.length} package chains`);
+
+    let completed = 0;
+    let failed = 0;
+    const queuedKeys = new Set(queue.map((candidate) => candidate.key));
+    try {
+      while (queue.length > 0 && !controller.signal.aborted) {
+        const candidate = queue.shift();
+        queuedKeys.delete(candidate.key);
+        if (!candidate || resolvedMap[candidate.key]) continue;
+        const total = completed + queue.length + 1;
+        setPackageChainActiveKey(candidate.key);
+        setPackageChainProgress(
+          `Resolving ${completed}/${total} package chains - ${candidate.packageName}@${candidate.version}`,
+        );
+        try {
+          const resp = await fetchInternal(candidate.url, {
+            signal: controller.signal,
+          });
+          const text = await resp.text();
+          addConsoleLines(text);
+          if (!resp.ok) {
+            throw new Error(
+              resp.status === 404
+                ? "package not found"
+                : text || `request failed: ${resp.status}`,
+            );
+          }
+          const data = text ? JSON.parse(text) : {};
+          resolvedMap = {
+            ...resolvedMap,
+            [candidate.key]: packageChainExpansionFromResponse(candidate, data),
+          };
+          completed += 1;
+        } catch (err) {
+          if (err.name === "AbortError" || controller.signal.aborted) break;
+          failed += 1;
+          resolvedMap = {
+            ...resolvedMap,
+            [candidate.key]: {
+              manager: candidate.manager,
+              rootPackageName: candidate.packageName,
+              rootVersion: candidate.version,
+              dependencies: {},
+              parents: {},
+              vulnerabilities: {},
+              vulnerabilityStatus: {},
+              failed: true,
+              error:
+                err && err.message
+                  ? err.message
+                  : "Unable to resolve package chain",
+            },
+          };
+        }
+        setPackageChainDeps(resolvedMap);
+        collectPackageChainCandidates(resolvedMap).forEach((nextCandidate) => {
+          if (resolvedMap[nextCandidate.key] || queuedKeys.has(nextCandidate.key)) {
+            return;
+          }
+          queue.push(nextCandidate);
+          queuedKeys.add(nextCandidate.key);
+        });
+      }
+    } finally {
+      if (packageChainAbortRef.current === controller) {
+        packageChainAbortRef.current = null;
+      }
+      setPackageChainLoading(false);
+      setPackageChainActiveKey("");
+      if (controller.signal.aborted) {
+        setPackageChainProgress("Dependency-chain resolution cancelled");
+      } else {
+        setPackageChainProgress(
+          `Resolved ${completed} package chain${completed === 1 ? "" : "s"}${
+            failed ? `; ${failed} failed` : ""
+          }`,
+        );
+        setPackageChainError(
+          failed
+            ? `${failed} package chain${failed === 1 ? "" : "s"} could not be resolved.`
+            : "",
+        );
+      }
     }
   };
 
@@ -3378,7 +3905,7 @@ function App() {
 
   const depLists = (() => {
     if (!showPackageResults) return null;
-    const displayDeps = normalizeDependencyRisks(deps);
+    const displayDeps = mergePackageChainDeps(deps, packageChainDeps);
     const childMap = new Map();
     displayDeps.forEach((d) => {
       const p = d.parent || "";
@@ -3871,8 +4398,19 @@ function App() {
       childSeen.add(key);
       const childParentKey = dep.root ? "" : dep.name;
       const children = uniqueChildren(childParentKey);
+      const chainState = packageChainDeps[key];
+      const childHasChainState = children.some((child) => {
+        const childKey = `${child.name}@${child.version}`;
+        return packageChainActiveKey === childKey || Boolean(packageChainDeps[childKey]);
+      });
       const defaultCollapsed =
-        !dep.root && largeDependencySet && children.length > 0 && !dep.risk;
+        !dep.root &&
+        largeDependencySet &&
+        children.length > 0 &&
+        !dep.risk &&
+        packageChainActiveKey !== key &&
+        !chainState &&
+        !childHasChainState;
       const isCollapsed = collapsed[key] ?? defaultCollapsed;
       const depParsed = splitDeepLinkName(submittedManager, "", dep.name);
       const depLocalLink = buildPackageDeepLink({
@@ -3888,6 +4426,7 @@ function App() {
           className: [
             dep.root ? "dependency-root-row" : "",
             dep.risk ? "dependency-risk-row" : "",
+            packageChainActiveKey === key ? "dependency-resolving-row" : "",
             !dep.risk && isUnresolvedOsvStatus(dep.osvStatus)
               ? "dependency-osv-unknown-row"
               : "",
@@ -3946,6 +4485,10 @@ function App() {
             ),
           dep.root &&
             e("span", { className: "dependency-root-badge" }, "root"),
+          packageChainActiveKey === key &&
+            e("span", { className: "dependency-chain-badge active" }, "resolving"),
+          chainState?.failed &&
+            e("span", { className: "dependency-chain-badge warning" }, "chain failed"),
           renderAdvisoryLinks(dep.cves),
           !isCollapsed && buildList(childParentKey, childSeen, depth),
         ),
@@ -4265,7 +4808,12 @@ function App() {
     if (githubRepoStatusFilter.startsWith("manager:")) {
       return pkg.manager === githubRepoStatusFilter.slice("manager:".length);
     }
-    const record = githubRepoVulnStatus[githubRepoPackageKey(pkg)] || null;
+    const key = githubRepoPackageKey(pkg);
+    const identityKey = githubRepoPackageIdentityKey(pkg);
+    const record =
+      (key && githubRepoVulnStatus[key]) ||
+      (identityKey && githubRepoVulnStatus[identityKey]) ||
+      null;
     if (
       githubRepoStatusFilter === "vulnerable" ||
       githubRepoStatusFilter === "osv-findings"
@@ -4292,6 +4840,8 @@ function App() {
       )
     : githubRepoStatusFilteredPackages;
   const visibleGithubRepoPackages = filteredGithubRepoPackages.slice(0, 80);
+  const githubRepoPackagePanelShowsTree =
+    githubRepoTransitiveLoading || Object.keys(githubRepoTransitiveDeps).length > 0;
   const githubRepoGraphPackageNodeId = (pkg, index) => {
     const key = githubRepoPackageKey(pkg);
     return `${key || `${pkg.manager || "pkg"}:${pkg.name || "dependency"}`}:${index}`;
@@ -4303,17 +4853,13 @@ function App() {
     acc[pkg.manager] = (acc[pkg.manager] || 0) + 1;
     return acc;
   }, {});
-  const selectedGithubRepoPackageKey = githubRepoPackageKey(
+  const selectedGithubRepoPackageKey = githubRepoPackageIdentityKey(
     selectedGithubRepoPackage,
   );
   const previewGithubRepoPackage =
     selectedGithubRepoPackage?.manager && selectedGithubRepoPackage?.name
       ? selectedGithubRepoPackage
       : null;
-  const normalizeGithubRepoVersion = (value) =>
-    String(value || "")
-      .trim()
-      .replace(/^v(?=\d)/i, "");
   const githubRepoHasExactVersion = (pkg) => {
     const versionValue = normalizeGithubRepoVersion(pkg?.version);
     return Boolean(
@@ -4354,9 +4900,19 @@ function App() {
   const githubRepoTransitiveRootCandidates = filteredGithubRepoPackages.filter(
     (pkg) => githubRepoDependencyApiUrl(pkg),
   );
+  const githubRepoAllRootCandidates = githubRepoPackages.filter((pkg) =>
+    githubRepoDependencyApiUrl(pkg),
+  );
   const githubRepoVisibleRootKeys = new Set(
     filteredGithubRepoPackages.map(githubRepoPackageKey).filter(Boolean),
   );
+  const githubRepoResolvedProjectRootCount = githubRepoAllRootCandidates.filter(
+    (pkg) => Boolean(githubRepoTransitiveDeps[githubRepoPackageKey(pkg)]),
+  ).length;
+  const githubRepoProjectRootCount = githubRepoAllRootCandidates.length;
+  const githubRepoProjectResolutionComplete =
+    githubRepoProjectRootCount > 0 &&
+    githubRepoResolvedProjectRootCount >= githubRepoProjectRootCount;
   const githubRepoTransitiveSummary = Object.entries(githubRepoTransitiveDeps)
     .filter(([rootKey]) => githubRepoVisibleRootKeys.has(rootKey))
     .reduce(
@@ -4407,7 +4963,12 @@ function App() {
   };
   const githubRepoPackageVulnRecord = (pkg) => {
     const key = githubRepoPackageKey(pkg);
-    return key ? githubRepoVulnStatus[key] || null : null;
+    const identityKey = githubRepoPackageIdentityKey(pkg);
+    return (
+      (key && githubRepoVulnStatus[key]) ||
+      (identityKey && githubRepoVulnStatus[identityKey]) ||
+      null
+    );
   };
   const githubRepoPackageRiskClass = (record) =>
     record?.status === "vulnerable"
@@ -4479,7 +5040,108 @@ function App() {
     if (record.status === "unknown") return "OSV unresolved";
     return "";
   };
-  const githubRepoVulnRecords = Object.values(githubRepoVulnStatus);
+  const ensureGithubRepoPackageOsvStatuses = async (
+    packages,
+    signal,
+    onProgress,
+  ) => {
+    const groupedChecks = new Map();
+    const immediateStatus = {};
+    packages.forEach((pkg) => {
+      const target = githubRepoPackageOsvTarget(pkg);
+      if (!target) return;
+      const keys = [
+        githubRepoPackageKey(pkg),
+        githubRepoPackageIdentityKey(pkg),
+      ].filter(Boolean);
+      if (keys.length === 0) return;
+      const cacheKey = versionRiskKey(
+        target.manager,
+        target.packageName,
+        target.version,
+      );
+      const cached =
+        versionRiskCacheRef.current.get(cacheKey) ||
+        keys.map((key) => githubRepoVulnStatus[key]).find(Boolean);
+      if (cached) {
+        keys.forEach((key) => {
+          immediateStatus[key] = cached;
+        });
+        return;
+      }
+      if (!groupedChecks.has(cacheKey)) {
+        groupedChecks.set(cacheKey, {
+          ...target,
+          cacheKey,
+          keys: new Set(),
+        });
+      }
+      keys.forEach((key) => groupedChecks.get(cacheKey).keys.add(key));
+    });
+
+    if (Object.keys(immediateStatus).length > 0) {
+      setGithubRepoVulnStatus((prev) => ({ ...prev, ...immediateStatus }));
+    }
+
+    const checks = Array.from(groupedChecks.values());
+    if (checks.length === 0) {
+      return { checked: 0, vulnerable: 0 };
+    }
+
+    let checked = 0;
+    let vulnerable = 0;
+    const accumulatedStatus = {};
+    await mapLimit(checks, 6, async (item) => {
+      if (signal?.aborted) return null;
+      const result = await queryOsvVulns(
+        item.manager,
+        item.packageName,
+        item.version,
+      );
+      if (signal?.aborted) return null;
+      const status = result.status || {};
+      let record;
+      if (status.status === "vulnerable" || status.status === "no_advisory") {
+        record = summarizeVersionRisk(result.vulns || []);
+        versionRiskCacheRef.current.set(item.cacheKey, record);
+      } else {
+        record = {
+          status: status.status || "unknown",
+          score: 0,
+          risk: null,
+          advisoryCount: 0,
+          advisoryIds: [],
+          cveIds: [],
+          error: status.error || "",
+        };
+      }
+      if (record.status === "vulnerable") vulnerable += 1;
+      item.keys.forEach((key) => {
+        accumulatedStatus[key] = record;
+      });
+      checked += 1;
+      if (checked % 20 === 0) {
+        setGithubRepoVulnStatus((prev) => ({ ...prev, ...accumulatedStatus }));
+      }
+      if (onProgress) onProgress(checked, checks.length, vulnerable);
+      return record;
+    });
+
+    if (!signal?.aborted) {
+      setGithubRepoVulnStatus((prev) => ({ ...prev, ...accumulatedStatus }));
+    }
+    return { checked, vulnerable };
+  };
+  const githubRepoVulnRecords = Array.from(
+    githubRepoPackages
+      .reduce((records, pkg) => {
+        const key = githubRepoPackageIdentityKey(pkg) || githubRepoPackageKey(pkg);
+        const record = githubRepoPackageVulnRecord(pkg);
+        if (key && record) records.set(key, record);
+        return records;
+      }, new Map())
+      .values(),
+  );
   const githubRepoCheckedCount = githubRepoVulnRecords.filter((record) =>
     ["vulnerable", "no_advisory"].includes(record.status),
   ).length;
@@ -4542,28 +5204,315 @@ function App() {
       githubRepoTransitiveAbortRef.current = null;
     }
     setGithubRepoTransitiveLoading(false);
-    setGithubRepoTransitiveProgress("Transitive resolution cancelled");
+    setGithubRepoTransitiveMode("");
+    setGithubRepoTransitiveActiveKey("");
+    setGithubRepoTransitiveProgress("Dependency-chain resolution cancelled");
   };
   const clearGithubRepoTransitiveDependencies = () => {
     cancelGithubRepoTransitiveDependencies();
     setGithubRepoTransitiveDeps({});
     setGithubRepoTransitiveProgress("");
     setGithubRepoTransitiveError("");
+    setGithubRepoTreeCollapsed({});
+    githubRepoGraphPositionsRef.current = {
+      height: 0,
+      positions: new Map(),
+      width: 0,
+    };
+    githubRepoGraphAnchorsRef.current = {
+      height: 0,
+      positions: new Map(),
+      width: 0,
+    };
   };
-  const resolveGithubRepoTransitiveDependencies = async () => {
+  const toggleGithubRepoTreeNode = (key) => {
+    setGithubRepoTreeCollapsed((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  };
+  const githubRepoTreeSecurityBadge = (pkg) => {
+    const record = githubRepoPackageVulnRecord(pkg);
+    if (record?.status === "vulnerable") {
+      const riskClass = githubRepoPackageRiskClass(record);
+      return e(
+        "span",
+        {
+          className: `github-package-tree-status vulnerable${riskClass}`,
+          title: githubRepoRiskLabel(record),
+        },
+        githubRepoRiskLabel(record),
+      );
+    }
+    if (record?.status === "no_advisory") {
+      return e(
+        "span",
+        {
+          className: "github-package-tree-status clean",
+          title: "OSV checked: no advisory",
+        },
+        "Clean",
+      );
+    }
+    if (record?.status === "unknown") {
+      return e(
+        "span",
+        {
+          className: "github-package-tree-status unresolved",
+          title: record.error || "OSV status unresolved",
+        },
+        "OSV unresolved",
+      );
+    }
+    if (!githubRepoHasExactVersion(pkg)) {
+      return e(
+        "span",
+        {
+          className: "github-package-tree-status muted",
+          title: "No exact version available for OSV lookup",
+        },
+        "No exact version",
+      );
+    }
+    return e(
+      "span",
+      {
+        className: "github-package-tree-status checking",
+        title: "Waiting for OSV status",
+      },
+      "Checking",
+    );
+  };
+  const githubRepoExpansionDependencyPackage = (expansion, depName) =>
+    githubRepoPackageFromFormattedName(
+      expansion.manager,
+      depName,
+      expansion.dependencies?.[depName],
+    );
+  const githubRepoExpansionChildren = (expansion, parentName) => {
+    if (!expansion || expansion.failed) return [];
+    const dependencies = expansion.dependencies || {};
+    const parents = expansion.parents || {};
+    return Object.keys(dependencies)
+      .filter((depName) => {
+        if (!depName || depName === parentName) return false;
+        const parentValues = Array.isArray(parents[depName])
+          ? parents[depName]
+          : [parents[depName] || ""];
+        return parentValues.some((value) =>
+          parentName === expansion.rootPackageName
+            ? !value || value === expansion.rootPackageName
+            : value === parentName,
+        );
+      })
+      .sort((a, b) => {
+        const aPkg = githubRepoExpansionDependencyPackage(expansion, a);
+        const bPkg = githubRepoExpansionDependencyPackage(expansion, b);
+        const aRecord = githubRepoPackageVulnRecord(aPkg);
+        const bRecord = githubRepoPackageVulnRecord(bPkg);
+        return (
+          (riskRank[bRecord?.risk] || 0) - (riskRank[aRecord?.risk] || 0) ||
+          a.localeCompare(b)
+        );
+      });
+  };
+  const renderGithubRepoTreeNode = (
+    pkg,
+    {
+      depth = 0,
+      hasChildren = false,
+      isCollapsed = false,
+      isRoot = false,
+      isResolving = false,
+      nodeKey,
+      onToggle = null,
+    } = {},
+  ) => {
+    const identityKey = githubRepoPackageIdentityKey(pkg);
+    const isSelected = identityKey && identityKey === selectedGithubRepoPackageKey;
+    const vulnRecord = githubRepoPackageVulnRecord(pkg);
+    const riskClass = githubRepoPackageRiskClass(vulnRecord);
+    return e(
+      "div",
+      {
+        className: [
+          "github-package-tree-node",
+          isRoot && "root",
+          isSelected && "selected",
+          isResolving && "resolving",
+          riskClass.trim(),
+        ]
+          .filter(Boolean)
+          .join(" "),
+        style: { "--tree-depth": depth },
+      },
+      e(
+        "button",
+        {
+          type: "button",
+          className: "github-package-tree-toggle",
+          disabled: !hasChildren,
+          onClick: onToggle,
+          title: hasChildren
+            ? isCollapsed
+              ? "Show dependency children"
+              : "Hide dependency children"
+            : "No resolved children",
+          "aria-label": hasChildren
+            ? isCollapsed
+              ? "Show dependency children"
+              : "Hide dependency children"
+            : "No resolved children",
+        },
+        hasChildren ? (isCollapsed ? "\u25B6" : "\u25BC") : "",
+      ),
+      e("span", {
+        className: `github-package-tree-dot${riskClass}`,
+        "aria-hidden": "true",
+      }),
+      e(
+        "button",
+        {
+          type: "button",
+          className: "github-package-tree-label",
+          onClick: () => setSelectedGithubRepoPackage(pkg),
+          title: pkg.purl || githubPackageLabel(pkg),
+          "aria-pressed": isSelected,
+        },
+        e("span", { className: "github-package-name" }, githubPackageLabel(pkg)),
+        e(
+          "span",
+          { className: "github-package-version" },
+          pkg.version || "latest",
+        ),
+      ),
+      githubRepoTreeSecurityBadge(pkg),
+      e(
+        "span",
+        { className: "github-package-manager" },
+        pmDisplayNames[pkg.manager] || pkg.manager,
+      ),
+    );
+  };
+  const renderGithubRepoExpansionChildren = (
+    expansion,
+    parentName,
+    depth,
+    seen,
+  ) => {
+    const childNames = githubRepoExpansionChildren(expansion, parentName);
+    if (childNames.length === 0) return null;
+    return e(
+      "div",
+      { className: "github-package-tree-children" },
+      childNames.map((childName) => {
+        const childPkg = githubRepoExpansionDependencyPackage(expansion, childName);
+        const childKey = `${expansion.manager}:${childName}@${
+          childPkg.version || ""
+        }`;
+        const branchKey = `${parentName}->${childKey}:${depth}`;
+        const nextSeen = new Set(seen);
+        const repeatsInBranch = nextSeen.has(childKey);
+        nextSeen.add(childKey);
+        const hasChildren =
+          !repeatsInBranch &&
+          githubRepoExpansionChildren(expansion, childName).length > 0;
+        const isCollapsed = Boolean(githubRepoTreeCollapsed[branchKey]);
+        return e(
+          "div",
+          { key: branchKey, className: "github-package-tree-branch" },
+          renderGithubRepoTreeNode(childPkg, {
+            depth,
+            hasChildren,
+            isCollapsed,
+            nodeKey: branchKey,
+            onToggle: hasChildren
+              ? () => toggleGithubRepoTreeNode(branchKey)
+              : null,
+          }),
+          hasChildren &&
+            !isCollapsed &&
+            renderGithubRepoExpansionChildren(
+              expansion,
+              childName,
+              depth + 1,
+              nextSeen,
+            ),
+        );
+      }),
+    );
+  };
+  const renderGithubRepoTreeRoot = (pkg, index) => {
+    const rootKey = githubRepoPackageKey(pkg);
+    const expansion = rootKey ? githubRepoTransitiveDeps[rootKey] : null;
+    const hasChildren =
+      expansion &&
+      !expansion.failed &&
+      githubRepoExpansionChildren(expansion, expansion.rootPackageName).length > 0;
+    const isCollapsed = Boolean(githubRepoTreeCollapsed[rootKey]);
+    const isResolving =
+      githubRepoTransitiveLoading && githubRepoTransitiveActiveKey === rootKey;
+    return e(
+      "div",
+      {
+        key:
+          rootKey ||
+          `${pkg.manager || "pkg"}-${pkg.name || "dependency"}-${index}`,
+        className: "github-package-tree-root",
+      },
+      renderGithubRepoTreeNode(pkg, {
+        depth: 0,
+        hasChildren,
+        isCollapsed,
+        isResolving,
+        isRoot: true,
+        nodeKey: rootKey,
+        onToggle: hasChildren ? () => toggleGithubRepoTreeNode(rootKey) : null,
+      }),
+      isResolving &&
+        e(
+          "div",
+          { className: "github-package-tree-state" },
+          "Resolving this package chain...",
+        ),
+      expansion?.failed &&
+        e(
+          "div",
+          { className: "github-package-tree-state warning" },
+          expansion.error || "Unable to resolve this package chain.",
+        ),
+      hasChildren &&
+        !isCollapsed &&
+        renderGithubRepoExpansionChildren(
+          expansion,
+          expansion.rootPackageName,
+          1,
+          new Set([`${pkg.manager}:${expansion.rootPackageName}@${pkg.version || ""}`]),
+        ),
+    );
+  };
+  const resolveGithubRepoTransitiveDependencies = async (scope = "visible") => {
     if (githubRepoTransitiveLoading) {
       cancelGithubRepoTransitiveDependencies();
       return;
     }
-    const roots = githubRepoTransitiveRootCandidates.filter(
+    const allRoots =
+      scope === "project"
+        ? githubRepoAllRootCandidates
+        : githubRepoTransitiveRootCandidates;
+    const roots = allRoots.filter(
       (pkg) => !githubRepoTransitiveDeps[githubRepoPackageKey(pkg)],
     );
     if (roots.length === 0) {
       setGithubRepoTransitiveError("");
       setGithubRepoTransitiveProgress(
-        githubRepoTransitiveRootCandidates.length === 0
-          ? "No visible packages have exact versions to resolve"
-          : "Transitive graph is already resolved for the visible packages",
+        allRoots.length === 0
+          ? scope === "project"
+            ? "No repository packages have exact versions to resolve"
+            : "No visible packages have exact versions to resolve"
+          : scope === "project"
+            ? "Complete project chain is already resolved"
+            : "Transitive graph is already resolved for the visible packages",
       );
       return;
     }
@@ -4571,25 +5520,35 @@ function App() {
     const controller = new AbortController();
     githubRepoTransitiveAbortRef.current = controller;
     setGithubRepoTransitiveLoading(true);
+    setGithubRepoTransitiveMode(scope);
+    setGithubRepoTransitiveActiveKey("");
     setGithubRepoTransitiveError("");
-    setGithubRepoTransitiveProgress(`Resolving 0/${roots.length} package graphs`);
+    setGithubRepoTransitiveProgress(
+      scope === "project"
+        ? `Building project chain 0/${roots.length} package roots`
+        : `Resolving 0/${roots.length} package graphs`,
+    );
 
     const nextDeps = { ...githubRepoTransitiveDeps };
     let completed = 0;
     let failed = 0;
     const commitProgress = (force = false) => {
       if (controller.signal.aborted) return;
-      if (force || completed % 8 === 0) {
+      if (force || completed % 8 === 0 || scope === "project") {
         setGithubRepoTransitiveDeps({ ...nextDeps });
       }
       setGithubRepoTransitiveProgress(
-        `Resolving ${completed}/${roots.length} package graphs${
-          failed ? `; ${failed} failed` : ""
-        }`,
+        scope === "project"
+          ? `Building project chain ${completed}/${roots.length} package roots${
+              failed ? `; ${failed} failed` : ""
+            }`
+          : `Resolving ${completed}/${roots.length} package graphs${
+              failed ? `; ${failed} failed` : ""
+            }`,
       );
     };
 
-    await mapLimit(roots, 4, async (pkg) => {
+    await mapLimit(roots, scope === "project" ? 1 : 4, async (pkg) => {
       if (controller.signal.aborted) return null;
       const rootKey = githubRepoPackageKey(pkg);
       const rootPackageName = formatPackage(
@@ -4597,6 +5556,7 @@ function App() {
         pkg.namespace || "",
         pkg.name,
       );
+      setGithubRepoTransitiveActiveKey(rootKey);
       try {
         const resp = await fetchInternal(githubRepoDependencyApiUrl(pkg), {
           signal: controller.signal,
@@ -4614,6 +5574,25 @@ function App() {
           parents: data.parents || {},
           errors: data.errors || {},
         };
+        const dependencyPackages = Object.entries(data.dependencies || {})
+          .map(([depName, depVersion]) =>
+            githubRepoPackageFromFormattedName(pkg.manager, depName, depVersion),
+          )
+          .filter((depPkg) => githubRepoHasExactVersion(depPkg));
+        await ensureGithubRepoPackageOsvStatuses(
+          [pkg, ...dependencyPackages],
+          controller.signal,
+          (checked, total, vulnerable) => {
+            if (controller.signal.aborted) return;
+            setGithubRepoTransitiveProgress(
+              scope === "project"
+                ? `Building ${githubPackageLabel(pkg)}: OSV ${checked}/${total}${
+                    vulnerable ? `; ${vulnerable} vulnerable` : ""
+                  }`
+                : `Checking OSV ${checked}/${total} for ${githubPackageLabel(pkg)}`,
+            );
+          },
+        );
       } catch (err) {
         if (controller.signal.aborted) return null;
         failed += 1;
@@ -4629,6 +5608,7 @@ function App() {
       } finally {
         if (!controller.signal.aborted) {
           completed += 1;
+          setGithubRepoTransitiveActiveKey("");
           commitProgress(false);
         }
       }
@@ -4637,17 +5617,25 @@ function App() {
 
     if (controller.signal.aborted) {
       setGithubRepoTransitiveLoading(false);
-      setGithubRepoTransitiveProgress("Transitive resolution cancelled");
+      setGithubRepoTransitiveMode("");
+      setGithubRepoTransitiveActiveKey("");
+      setGithubRepoTransitiveProgress("Dependency-chain resolution cancelled");
       return;
     }
 
     githubRepoTransitiveAbortRef.current = null;
     setGithubRepoTransitiveDeps({ ...nextDeps });
     setGithubRepoTransitiveLoading(false);
+    setGithubRepoTransitiveMode("");
+    setGithubRepoTransitiveActiveKey("");
     setGithubRepoTransitiveProgress(
-      `Resolved ${completed - failed}/${roots.length} package graphs${
-        failed ? `; ${failed} failed` : ""
-      }`,
+      scope === "project"
+        ? `Complete project chain resolved for ${completed - failed}/${roots.length} package roots${
+            failed ? `; ${failed} failed` : ""
+          }`
+        : `Resolved ${completed - failed}/${roots.length} package graphs${
+            failed ? `; ${failed} failed` : ""
+          }`,
     );
     setGithubRepoTransitiveError(
       failed ? `${failed} package graph${failed === 1 ? "" : "s"} could not be resolved.` : "",
@@ -4670,6 +5658,7 @@ function App() {
     const groupedChecks = new Map();
     packages.forEach((pkg) => {
       const key = githubRepoPackageKey(pkg);
+      const identityKey = githubRepoPackageIdentityKey(pkg);
       const target = githubRepoPackageOsvTarget(pkg);
       if (!key || !target) return;
       const cacheKey = versionRiskKey(
@@ -4680,6 +5669,7 @@ function App() {
       const cached = versionRiskCacheRef.current.get(cacheKey);
       if (cached) {
         initialStatus[key] = cached;
+        if (identityKey) initialStatus[identityKey] = cached;
         return;
       }
       if (!groupedChecks.has(cacheKey)) {
@@ -4690,6 +5680,9 @@ function App() {
         });
       }
       groupedChecks.get(cacheKey).keys.push(key);
+      if (identityKey && identityKey !== key) {
+        groupedChecks.get(cacheKey).keys.push(identityKey);
+      }
     });
 
     const checks = Array.from(groupedChecks.values());
@@ -4823,16 +5816,18 @@ function App() {
     ];
     const packageNodes = repoGraphPackages.map((pkg, index) => {
       const key = githubRepoPackageKey(pkg);
+      const identityKey = githubRepoPackageIdentityKey(pkg);
       const vulnRecord = key ? githubRepoVulnStatus[key] || null : null;
       return {
         id: githubRepoGraphPackageNodeId(pkg, index),
+        identityKey,
         key,
         label: githubPackageLabel(pkg),
         version: pkg.version || "",
         manager: pkg.manager || "unknown",
-        vulnRecord,
+        vulnRecord: githubRepoPackageVulnRecord(pkg) || vulnRecord,
         pkg,
-        selected: key && key === selectedGithubRepoPackageKey,
+        selected: identityKey && identityKey === selectedGithubRepoPackageKey,
       };
     });
     nodes.push(...packageNodes);
@@ -4856,9 +5851,11 @@ function App() {
             depVersion,
           );
           const depKey = githubRepoPackageKey(depPkg);
-          const depRecord = depKey ? githubRepoVulnStatus[depKey] || null : null;
+          const depIdentityKey = githubRepoPackageIdentityKey(depPkg);
+          const depRecord = githubRepoPackageVulnRecord(depPkg);
           transitiveNodesById.set(depNodeId, {
             id: depNodeId,
+            identityKey: depIdentityKey,
             key: depKey,
             label: githubPackageLabel(depPkg),
             version: depVersion || "",
@@ -4866,7 +5863,8 @@ function App() {
             vulnRecord: depRecord,
             pkg: depPkg,
             transitiveDep: true,
-            selected: depKey && depKey === selectedGithubRepoPackageKey,
+            selected:
+              depIdentityKey && depIdentityKey === selectedGithubRepoPackageKey,
           });
         }
 
@@ -4902,6 +5900,113 @@ function App() {
         })),
         transitiveLinks,
       );
+
+    const hashGraphNode = (value) => {
+      let hash = 0;
+      const text = String(value || "");
+      for (let i = 0; i < text.length; i += 1) {
+        hash = (hash * 31 + text.charCodeAt(i)) % 9973;
+      }
+      return hash;
+    };
+    const previousGraph = githubRepoGraphPositionsRef.current || {
+      height,
+      positions: new Map(),
+      width,
+    };
+    const previousPositions = previousGraph.positions || new Map();
+    const scaleX =
+      previousGraph.width > 0 && previousGraph.width !== width
+        ? width / previousGraph.width
+        : 1;
+    const scaleY =
+      previousGraph.height > 0 && previousGraph.height !== height
+        ? height / previousGraph.height
+        : 1;
+    const dependencyAnchorGraph =
+      previousPositions.size > 0 &&
+      (githubRepoTransitiveLoading ||
+        Object.keys(githubRepoTransitiveDeps).length > 0);
+    const softAnchorGraph =
+      dependencyAnchorGraph ||
+      (previousPositions.size > 0 && githubRepoGraphExpanded);
+    const previousAnchorGraph = githubRepoGraphAnchorsRef.current || {
+      height,
+      positions: new Map(),
+      width,
+    };
+    const rawAnchorPositions =
+      dependencyAnchorGraph && previousAnchorGraph.positions?.size
+        ? previousAnchorGraph.positions
+        : previousPositions;
+    const anchorScaleX =
+      previousAnchorGraph.width > 0 &&
+      previousAnchorGraph.width !== width &&
+      rawAnchorPositions === previousAnchorGraph.positions
+        ? width / previousAnchorGraph.width
+        : scaleX;
+    const anchorScaleY =
+      previousAnchorGraph.height > 0 &&
+      previousAnchorGraph.height !== height &&
+      rawAnchorPositions === previousAnchorGraph.positions
+        ? height / previousAnchorGraph.height
+        : scaleY;
+    const anchorPositions = new Map();
+    rawAnchorPositions.forEach((position, id) => {
+      anchorPositions.set(id, {
+        x: Math.max(18, Math.min(width - 18, position.x * anchorScaleX)),
+        y: Math.max(18, Math.min(height - 18, position.y * anchorScaleY)),
+      });
+    });
+    const initialPositions = new Map();
+    nodes.forEach((d) => {
+      const saved = previousPositions.get(d.id);
+      if (saved) {
+        d.x = Math.max(18, Math.min(width - 18, saved.x * scaleX));
+        d.y = Math.max(18, Math.min(height - 18, saved.y * scaleY));
+        const anchor = anchorPositions.get(d.id);
+        if (anchor && softAnchorGraph) {
+          d.anchorX = anchor.x;
+          d.anchorY = anchor.y;
+        }
+        initialPositions.set(d.id, { x: d.x, y: d.y });
+        return;
+      }
+      if (d.root) {
+        d.x = width / 2;
+        d.y = height / 2;
+      } else {
+        const incoming = links.find((linkItem) => linkItem.target === d.id);
+        const currentParentPosition = incoming
+          ? initialPositions.get(incoming.source)
+          : null;
+        const savedParentPosition =
+          incoming && !currentParentPosition
+            ? previousPositions.get(incoming.source)
+            : null;
+        const parentX = currentParentPosition
+          ? currentParentPosition.x
+          : savedParentPosition
+            ? savedParentPosition.x * scaleX
+            : 0;
+        const parentY = currentParentPosition
+          ? currentParentPosition.y
+          : savedParentPosition
+            ? savedParentPosition.y * scaleY
+            : 0;
+        const angle = (hashGraphNode(d.id) / 9973) * Math.PI * 2;
+        const distance = d.transitiveDep ? 34 : d.managerGroup ? 86 : 52;
+        d.x = currentParentPosition || savedParentPosition
+          ? parentX + Math.cos(angle) * distance
+          : width / 2 + Math.cos(angle) * distance;
+        d.y = currentParentPosition || savedParentPosition
+          ? parentY + Math.sin(angle) * distance
+          : height / 2 + Math.sin(angle) * distance;
+      }
+      d.x = Math.max(18, Math.min(width - 18, d.x));
+      d.y = Math.max(18, Math.min(height - 18, d.y));
+      initialPositions.set(d.id, { x: d.x, y: d.y });
+    });
 
     svg.attr("viewBox", `0 0 ${width} ${height}`);
     svg.attr("preserveAspectRatio", "xMidYMid meet");
@@ -5014,7 +6119,15 @@ function App() {
       )
       .force(
         "charge",
-        d3.forceManyBody().strength(graphPackageLikeCount > 1200 ? -18 : graphPackageLikeCount > 80 ? -34 : -74),
+        d3.forceManyBody().strength((d) => {
+          const base =
+            graphPackageLikeCount > 1200
+              ? -18
+              : graphPackageLikeCount > 80
+                ? -34
+                : -74;
+          return d.anchorX !== undefined && softAnchorGraph ? base * 0.35 : base;
+        }),
       )
       .force(
         "collide",
@@ -5024,8 +6137,30 @@ function App() {
             d.root ? 26 : d.managerGroup ? 20 : d.transitiveDep ? 9 : 13,
           ),
       )
-      .force("x", d3.forceX(width / 2).strength(0.05))
-      .force("y", d3.forceY(height / 2).strength(0.08));
+      .force(
+        "x",
+        d3
+          .forceX((d) => (d.anchorX !== undefined ? d.anchorX : width / 2))
+          .strength((d) => {
+            if (d.anchorX === undefined) return 0.04;
+            if (!softAnchorGraph) return 0.12;
+            if (d.root) return 0.82;
+            if (d.managerGroup) return 0.62;
+            return d.transitiveDep ? 0.38 : 0.44;
+          }),
+      )
+      .force(
+        "y",
+        d3
+          .forceY((d) => (d.anchorY !== undefined ? d.anchorY : height / 2))
+          .strength((d) => {
+            if (d.anchorY === undefined) return 0.06;
+            if (!softAnchorGraph) return 0.14;
+            if (d.root) return 0.86;
+            if (d.managerGroup) return 0.66;
+            return d.transitiveDep ? 0.42 : 0.48;
+          }),
+      );
 
     svg.on("click", () => setSelectedGithubRepoPackage(null));
 
@@ -5051,11 +6186,63 @@ function App() {
         : graphPackageLikeCount > 250
           ? 110
           : 150;
+    const driftLimitFor = (d) => {
+      if (d.root) return 3;
+      if (d.managerGroup) return 7;
+      if (d.selected) return 6;
+      if (d.transitiveDep) return 12;
+      return 9;
+    };
+    const applySubtleAnchorDrift = () => {
+      if (!softAnchorGraph) return;
+      nodes.forEach((d) => {
+        if (d.anchorX === undefined || d.anchorY === undefined) return;
+        const dx = d.x - d.anchorX;
+        const dy = d.y - d.anchorY;
+        const distance = Math.hypot(dx, dy);
+        const limit = driftLimitFor(d);
+        if (distance <= limit || distance === 0) return;
+        d.x = d.anchorX + (dx / distance) * limit;
+        d.y = d.anchorY + (dy / distance) * limit;
+        d.vx *= 0.35;
+        d.vy *= 0.35;
+      });
+    };
     simulation.stop();
     for (let i = 0; i < tickCount; i += 1) {
       simulation.tick();
+      applySubtleAnchorDrift();
     }
     renderSettledGraph();
+    const nextPositions = new Map();
+    nodes.forEach((d) => {
+      nextPositions.set(d.id, {
+        x: Math.max(18, Math.min(width - 18, d.x || width / 2)),
+        y: Math.max(18, Math.min(height - 18, d.y || height / 2)),
+      });
+    });
+    githubRepoGraphPositionsRef.current = {
+      height,
+      positions: nextPositions,
+      width,
+    };
+    if (dependencyAnchorGraph) {
+      const nextAnchors = new Map(anchorPositions);
+      nextPositions.forEach((position, id) => {
+        if (!nextAnchors.has(id)) nextAnchors.set(id, position);
+      });
+      githubRepoGraphAnchorsRef.current = {
+        height,
+        positions: nextAnchors,
+        width,
+      };
+    } else if (!githubRepoGraphExpanded) {
+      githubRepoGraphAnchorsRef.current = {
+        height: 0,
+        positions: new Map(),
+        width: 0,
+      };
+    }
 
     return () => simulation.stop();
   }, [
@@ -5064,6 +6251,7 @@ function App() {
     appearanceMode,
     githubRepoGraphPackageSignature,
     githubRepoTransitiveGraphSignature,
+    githubRepoTransitiveLoading,
     githubRepoGraphExpanded,
   ]);
 
@@ -5076,25 +6264,25 @@ function App() {
 
     packageNodes
       .attr("class", (d) => {
-        const record = d.key ? githubRepoVulnStatus[d.key] || null : null;
+        const record = githubRepoPackageVulnRecord(d.pkg);
         d.vulnRecord = record;
         return githubRepoGraphNodeClassName(d, record);
       })
       .attr("fill", (d) => {
-        const record = d.key ? githubRepoVulnStatus[d.key] || null : null;
+        const record = githubRepoPackageVulnRecord(d.pkg);
         return githubRepoGraphPackageFill(d, record);
       })
       .attr("stroke", (d) => {
-        const record = d.key ? githubRepoVulnStatus[d.key] || null : null;
+        const record = githubRepoPackageVulnRecord(d.pkg);
         return githubRepoGraphPackageStroke(d, record);
       })
       .attr("stroke-width", (d) => {
-        const record = d.key ? githubRepoVulnStatus[d.key] || null : null;
+        const record = githubRepoPackageVulnRecord(d.pkg);
         return githubRepoGraphPackageStrokeWidth(d, record);
       });
 
     packageNodes.select("title").text((d) => {
-      const record = d.key ? githubRepoVulnStatus[d.key] || null : null;
+      const record = githubRepoPackageVulnRecord(d.pkg);
       return [
         `${githubPackageLabel(d.pkg)}${d.pkg.version ? `@${d.pkg.version}` : ""}`,
         pmDisplayNames[d.pkg.manager] || d.pkg.manager,
@@ -5877,6 +7065,25 @@ function App() {
       document.body,
     );
 
+  const packageChainCandidates = showPackageResults
+    ? collectPackageChainCandidates(packageChainDeps)
+    : [];
+  const packageChainResolvedCount = Object.keys(packageChainDeps).length;
+  const packageChainComplete =
+    packageChainCandidates.length > 0 &&
+    packageChainResolvedCount >= packageChainCandidates.length &&
+    !packageChainLoading;
+  const packageChainButtonText = packageChainLoading
+    ? "Stop chain"
+    : packageChainComplete
+      ? "Chain complete"
+      : "Build full chain";
+  const packageChainStatusText =
+    packageChainProgress ||
+    (packageChainResolvedCount > 0
+      ? `${packageChainResolvedCount}/${packageChainCandidates.length} chains resolved`
+      : "");
+
   return e(
     "div",
     null,
@@ -6592,59 +7799,70 @@ function App() {
                       }),
                       e(
                         "div",
-                        { className: "github-package-list" },
-                        visibleGithubRepoPackages.map((pkg, index) => {
-                          const packageKey = githubRepoPackageKey(pkg);
-                          const vulnRecord = githubRepoPackageVulnRecord(pkg);
-                          const riskClass = githubRepoPackageRiskClass(vulnRecord);
-                          const isSelected =
-                            packageKey && packageKey === selectedGithubRepoPackageKey;
-                          return e(
-                            "button",
-                            {
-                              key:
-                                packageKey ||
-                                `${pkg.manager || "pkg"}-${pkg.name || "dependency"}-${index}`,
-                              type: "button",
-                              className: `github-package-card${riskClass}${
-                                isSelected ? " selected" : ""
-                              }`,
-                              onClick: () => setSelectedGithubRepoPackage(pkg),
-                              title: pkg.purl || githubPackageLabel(pkg),
-                              "aria-pressed": isSelected,
-                            },
-                            e(
-                              "span",
-                              { className: "github-package-main" },
-                              e(
-                                "span",
-                                { className: "github-package-name" },
-                                githubPackageLabel(pkg),
-                              ),
-                              e(
-                                "span",
-                                { className: "github-package-version" },
-                                pkg.version || "latest",
-                              ),
-                              vulnRecord?.status === "vulnerable" &&
+                        {
+                          className: `github-package-list${
+                            githubRepoPackagePanelShowsTree ? " tree" : ""
+                          }`,
+                        },
+                        githubRepoPackagePanelShowsTree
+                          ? filteredGithubRepoPackages.map(renderGithubRepoTreeRoot)
+                          : visibleGithubRepoPackages.map((pkg, index) => {
+                              const packageKey = githubRepoPackageKey(pkg);
+                              const packageIdentityKey =
+                                githubRepoPackageIdentityKey(pkg);
+                              const vulnRecord = githubRepoPackageVulnRecord(pkg);
+                              const riskClass =
+                                githubRepoPackageRiskClass(vulnRecord);
+                              const isSelected =
+                                packageIdentityKey &&
+                                packageIdentityKey === selectedGithubRepoPackageKey;
+                              return e(
+                                "button",
+                                {
+                                  key:
+                                    packageKey ||
+                                    `${pkg.manager || "pkg"}-${pkg.name || "dependency"}-${index}`,
+                                  type: "button",
+                                  className: `github-package-card${riskClass}${
+                                    isSelected ? " selected" : ""
+                                  }`,
+                                  onClick: () => setSelectedGithubRepoPackage(pkg),
+                                  title: pkg.purl || githubPackageLabel(pkg),
+                                  "aria-pressed": isSelected,
+                                },
                                 e(
                                   "span",
-                                  {
-                                    className: `github-package-risk-badge${riskClass}`,
-                                    title: githubRepoRiskLabel(vulnRecord),
-                                  },
-                                  githubRepoRiskLabel(vulnRecord),
+                                  { className: "github-package-main" },
+                                  e(
+                                    "span",
+                                    { className: "github-package-name" },
+                                    githubPackageLabel(pkg),
+                                  ),
+                                  e(
+                                    "span",
+                                    { className: "github-package-version" },
+                                    pkg.version || "latest",
+                                  ),
+                                  vulnRecord?.status === "vulnerable" &&
+                                    e(
+                                      "span",
+                                      {
+                                        className: `github-package-risk-badge${riskClass}`,
+                                        title: githubRepoRiskLabel(vulnRecord),
+                                      },
+                                      githubRepoRiskLabel(vulnRecord),
+                                    ),
                                 ),
-                            ),
-                            e(
-                              "span",
-                              { className: "github-package-manager" },
-                              pmDisplayNames[pkg.manager] || pkg.manager,
-                            ),
-                          );
-                        }),
+                                e(
+                                  "span",
+                                  { className: "github-package-manager" },
+                                  pmDisplayNames[pkg.manager] || pkg.manager,
+                                ),
+                              );
+                            }),
                       ),
-                      filteredGithubRepoPackages.length > visibleGithubRepoPackages.length &&
+                      !githubRepoPackagePanelShowsTree &&
+                        filteredGithubRepoPackages.length > visibleGithubRepoPackages.length &&
                         e(
                           "div",
                           { className: "github-import-more" },
@@ -6700,24 +7918,72 @@ function App() {
                             {
                               type: "button",
                               className: `repo-graph-action-button${
-                                githubRepoTransitiveLoading ? " danger" : " primary"
+                                githubRepoTransitiveLoading &&
+                                githubRepoTransitiveMode === "visible"
+                                  ? " danger"
+                                  : " primary"
                               }`,
                               onClick: githubRepoTransitiveLoading
-                                ? cancelGithubRepoTransitiveDependencies
-                                : resolveGithubRepoTransitiveDependencies,
+                                ? githubRepoTransitiveMode === "visible"
+                                  ? cancelGithubRepoTransitiveDependencies
+                                  : undefined
+                                : () => resolveGithubRepoTransitiveDependencies("visible"),
                               disabled:
-                                !githubRepoTransitiveLoading &&
-                                githubRepoTransitiveRootCandidates.length === 0,
+                                (githubRepoTransitiveLoading &&
+                                  githubRepoTransitiveMode !== "visible") ||
+                                (!githubRepoTransitiveLoading &&
+                                  githubRepoTransitiveRootCandidates.length === 0),
                               title:
                                 githubRepoTransitiveRootCandidates.length === 0
                                   ? "No visible packages have exact versions to resolve"
                                   : "Resolve transitive dependencies for the visible package set",
                             },
-                            githubRepoTransitiveLoading
-                              ? "Cancel transitive"
+                            githubRepoTransitiveLoading &&
+                              githubRepoTransitiveMode === "visible"
+                              ? "Cancel visible"
                               : githubRepoTransitiveNodeCount > 0
-                                ? "Resolve more"
-                                : "Resolve transitive",
+                                ? "Resolve visible"
+                                : "Resolve visible",
+                          ),
+                          e(
+                            "button",
+                            {
+                              type: "button",
+                              className: `repo-graph-action-button${
+                                githubRepoTransitiveLoading &&
+                                githubRepoTransitiveMode === "project"
+                                  ? " danger"
+                                  : githubRepoProjectResolutionComplete
+                                    ? ""
+                                    : " primary"
+                              }`,
+                              onClick:
+                                githubRepoTransitiveLoading &&
+                                githubRepoTransitiveMode === "project"
+                                  ? cancelGithubRepoTransitiveDependencies
+                                  : () =>
+                                      resolveGithubRepoTransitiveDependencies(
+                                        "project",
+                                      ),
+                              disabled:
+                                (githubRepoTransitiveLoading &&
+                                  githubRepoTransitiveMode !== "project") ||
+                                (!githubRepoTransitiveLoading &&
+                                  (githubRepoProjectRootCount === 0 ||
+                                    githubRepoProjectResolutionComplete)),
+                              title:
+                                githubRepoProjectRootCount === 0
+                                  ? "No repository packages have exact versions to resolve"
+                                  : githubRepoProjectResolutionComplete
+                                    ? "Complete dependency chain has been resolved"
+                                    : "Build the complete dependency chain one package at a time",
+                            },
+                            githubRepoTransitiveLoading &&
+                              githubRepoTransitiveMode === "project"
+                              ? "Stop chain"
+                              : githubRepoProjectResolutionComplete
+                                ? "Chain complete"
+                                : "Build full chain",
                           ),
                           githubRepoTransitiveNodeCount > 0 &&
                             !githubRepoTransitiveLoading &&
@@ -6933,6 +8199,55 @@ function App() {
                       onClick: () => setSearch(""),
                     },
                     "\u00d7",
+                  ),
+              ),
+              e(
+                "div",
+                { className: "package-chain-actions" },
+                e(
+                  "button",
+                  {
+                    type: "button",
+                    className: `package-chain-button${
+                      packageChainLoading ? " danger" : " primary"
+                    }`,
+                    onClick: packageChainLoading
+                      ? cancelPackageChainResolution
+                      : resolvePackageDependencyChains,
+                    disabled:
+                      !packageChainLoading &&
+                      (packageChainCandidates.length === 0 ||
+                        packageChainComplete),
+                    title:
+                      packageChainCandidates.length === 0
+                        ? "No exact-version dependency nodes are available to resolve"
+                        : packageChainComplete
+                          ? "Complete dependency chain has been resolved"
+                          : "Resolve each dependency node one package chain at a time",
+                  },
+                  packageChainButtonText,
+                ),
+                packageChainResolvedCount > 0 &&
+                  !packageChainLoading &&
+                  e(
+                    "button",
+                    {
+                      type: "button",
+                      className: "package-chain-button secondary",
+                      onClick: clearPackageChainResolution,
+                      title: "Remove resolved dependency-chain expansions",
+                    },
+                    "Clear chain",
+                  ),
+                packageChainStatusText &&
+                  e(
+                    "span",
+                    {
+                      className: `package-chain-status${
+                        packageChainError ? " warning" : ""
+                      }`,
+                    },
+                    packageChainError || packageChainStatusText,
                   ),
               ),
             ),

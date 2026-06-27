@@ -827,9 +827,17 @@ button.github-import-stat:focus-visible {
 
 .github-import-layout {
   display: grid;
-  grid-template-columns: minmax(260px, 0.85fr) minmax(360px, 1.15fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   align-items: start;
+}
+
+.github-repo-graph-panel {
+  order: 1;
+}
+
+.github-package-list-panel {
+  order: 2;
 }
 
 .github-package-list-panel,
@@ -987,17 +995,202 @@ button.github-import-stat:focus-visible {
 
 .github-package-list {
   display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 6px;
-  max-height: 428px;
+  max-height: 360px;
   overflow-y: auto;
   padding-right: 2px;
+}
+
+.github-package-list.tree {
+  display: block;
+  max-height: 360px;
+}
+
+.github-package-tree-root {
+  min-width: 0;
+  margin-bottom: 6px;
+}
+
+.github-package-tree-children {
+  min-width: 0;
+  margin-left: 14px;
+  padding-left: 10px;
+  border-left: 1px dashed var(--border-color);
+}
+
+.github-package-tree-branch {
+  min-width: 0;
+}
+
+.github-package-tree-node {
+  display: grid;
+  grid-template-columns: 20px 14px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 34px;
+  margin: 3px 0;
+  padding: 5px 6px;
+  padding-left: calc(6px + min(var(--tree-depth, 0), 6) * 4px);
+  border: 1px solid rgba(216, 222, 232, 0.78);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--text-color);
+}
+
+.github-package-tree-node.root {
+  background: rgba(248, 250, 252, 0.92);
+  border-color: rgba(205, 214, 225, 0.92);
+}
+
+.github-package-tree-node.selected {
+  border-color: var(--primary-color);
+  background: rgba(15, 105, 112, 0.1);
+  box-shadow: 0 8px 18px rgba(15, 105, 112, 0.08);
+}
+
+.github-package-tree-node.resolving {
+  border-color: rgba(15, 105, 112, 0.38);
+  background: rgba(15, 105, 112, 0.08);
+}
+
+.github-package-tree-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  min-width: 20px;
+  height: 22px;
+  min-height: 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--neutral-color);
+  font-size: 0.72rem;
+  box-shadow: none;
+}
+
+.github-package-tree-toggle:disabled {
+  opacity: 0.28;
+}
+
+.github-package-tree-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--neutral-color);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.96);
+}
+
+.github-package-tree-dot.repo-risk-critical,
+.github-package-tree-dot.repo-risk-high {
+  background: #c93737;
+}
+
+.github-package-tree-dot.repo-risk-medium {
+  background: #b56b00;
+}
+
+.github-package-tree-dot.repo-risk-low {
+  background: #168a56;
+}
+
+.github-package-tree-dot.repo-risk-advisory {
+  background: #8a6a12;
+}
+
+.github-package-tree-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 0;
+  min-height: 28px;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  box-shadow: none;
+}
+
+.github-package-tree-label:hover,
+.github-package-tree-label:focus-visible,
+.github-package-tree-toggle:hover,
+.github-package-tree-toggle:focus-visible {
+  color: var(--primary-color);
+  background: transparent;
+}
+
+.github-package-tree-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 20px;
+  padding: 2px 6px;
+  border: 1px solid #cdd6e1;
+  border-radius: 999px;
+  background: #eef3f6;
+  color: #344054;
+  font-size: 0.66rem;
+  font-weight: 800;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.github-package-tree-status.clean {
+  border-color: rgba(18, 128, 92, 0.28);
+  background: #ddf7eb;
+  color: #126b46;
+}
+
+.github-package-tree-status.checking,
+.github-package-tree-status.muted {
+  color: var(--neutral-color);
+}
+
+.github-package-tree-status.unresolved {
+  border-color: rgba(181, 107, 0, 0.28);
+  background: #fff4d6;
+  color: #7a4b00;
+}
+
+.github-package-tree-status.vulnerable.repo-risk-critical,
+.github-package-tree-status.vulnerable.repo-risk-high {
+  border-color: rgba(201, 55, 55, 0.34);
+  background: #ffe3e3;
+  color: #9f2d2d;
+}
+
+.github-package-tree-status.vulnerable.repo-risk-medium {
+  border-color: rgba(181, 107, 0, 0.34);
+  background: #fff4d6;
+  color: #7a4b00;
+}
+
+.github-package-tree-status.vulnerable.repo-risk-low {
+  border-color: rgba(18, 128, 92, 0.28);
+  background: #ddf7eb;
+  color: #126b46;
+}
+
+.github-package-tree-state {
+  margin: 0 0 6px 34px;
+  color: var(--neutral-color);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.github-package-tree-state.warning {
+  color: #9f2d2d;
 }
 
 .github-repo-graph {
   display: block;
   width: 100%;
-  height: 420px;
-  min-height: 360px;
+  height: clamp(520px, 58vh, 720px);
+  min-height: 480px;
   border: 1px solid var(--border-color);
   border-radius: 8px;
   background:
@@ -1417,6 +1610,69 @@ button:hover {
   padding-top: 6px;
 }
 
+.package-chain-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(560px, calc(100vw - 48px));
+  padding: 5px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--background-paper) 88%, transparent);
+  box-shadow: 0 8px 20px rgba(12, 18, 26, 0.1);
+}
+
+.package-chain-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--background-paper);
+  color: var(--text-color);
+  font-size: 0.75rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.package-chain-button.primary {
+  border-color: rgba(15, 105, 112, 0.34);
+  background: var(--primary-color);
+  color: #fff;
+}
+
+.package-chain-button.secondary {
+  color: var(--neutral-color);
+}
+
+.package-chain-button.danger {
+  border-color: rgba(201, 55, 55, 0.36);
+  background: #c93737;
+  color: #fff;
+}
+
+.package-chain-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.package-chain-status {
+  max-width: 240px;
+  overflow: hidden;
+  color: var(--neutral-color);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.package-chain-status.warning {
+  color: #9f2d2d;
+}
+
 li.transitive {
   color: var(--text-color);
 }
@@ -1543,6 +1799,11 @@ li.transitive {
   font-weight: 700;
 }
 
+.dependency-resolving-row {
+  border-color: rgba(15, 105, 112, 0.46);
+  box-shadow: 0 8px 18px rgba(15, 105, 112, 0.08);
+}
+
 .dependency-root-badge {
   display: inline-flex;
   align-items: center;
@@ -1554,6 +1815,28 @@ li.transitive {
   color: var(--neutral-color);
   font-size: 0.68rem;
   line-height: 1;
+}
+
+.dependency-chain-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: 1px solid rgba(15, 105, 112, 0.32);
+  border-radius: 999px;
+  background: rgba(15, 105, 112, 0.1);
+  color: var(--primary-color);
+  font-size: 0.66rem;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.dependency-chain-badge.warning {
+  border-color: rgba(181, 107, 0, 0.34);
+  background: #fff4d6;
+  color: #7a4b00;
 }
 
 .dep-risk-score {
@@ -2805,6 +3088,21 @@ a:hover {
     max-height: 320px;
   }
 
+  .github-package-tree-node {
+    grid-template-columns: 20px 12px minmax(0, 1fr);
+  }
+
+  .github-package-tree-node .github-package-tree-status,
+  .github-package-tree-node .github-package-manager {
+    justify-self: start;
+    grid-column: 3;
+  }
+
+  .github-package-tree-children {
+    margin-left: 8px;
+    padding-left: 8px;
+  }
+
   .github-repo-graph {
     height: clamp(340px, 52vh, 460px);
     min-height: 320px;
@@ -3205,6 +3503,7 @@ a:hover {
     padding-top: 0;
     margin: 0 0 8px;
     width: 100%;
+    flex-wrap: wrap;
     justify-content: stretch;
   }
 
@@ -3213,6 +3512,17 @@ a:hover {
     grid-template-columns: auto minmax(0, 1fr);
     gap: 8px;
     width: 100%;
+  }
+
+  .package-chain-actions {
+    width: 100%;
+    max-width: none;
+    flex-wrap: wrap;
+  }
+
+  .package-chain-status {
+    flex: 1 1 180px;
+    max-width: none;
   }
 
   .search-wrapper input {
@@ -3997,9 +4307,15 @@ button:disabled {
 }
 
 .dependency-risk-row {
-  border: 1px solid #ffd4c7;
-  background: #fff8f6;
-  box-shadow: inset 3px 0 0 rgba(201, 55, 55, 0.58);
+  border: 1px solid #d8dee8;
+  background: transparent;
+  box-shadow: none;
+}
+
+.dependency-root-row.dependency-risk-row {
+  border-color: #d8dee8;
+  background: #f8fafc;
+  box-shadow: inset 3px 0 0 rgba(15, 105, 112, 0.45);
 }
 
 .dependency-root-row > .dep-name {
@@ -4007,7 +4323,7 @@ button:disabled {
 }
 
 .dependency-risk-row > .dep-name {
-  color: #7a271a;
+  color: #18202b;
 }
 
 .dep-risk-score {
@@ -5113,6 +5429,73 @@ html[data-theme="dark"] .github-package-card.selected {
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
 }
 
+html[data-theme="dark"] .github-package-tree-children {
+  border-left-color: #2f3e4c;
+}
+
+html[data-theme="dark"] .github-package-tree-node {
+  border-color: rgba(47, 62, 76, 0.84);
+  background: rgba(12, 20, 28, 0.72);
+}
+
+html[data-theme="dark"] .github-package-tree-node.root {
+  border-color: rgba(52, 68, 84, 0.88);
+  background: rgba(18, 28, 38, 0.84);
+}
+
+html[data-theme="dark"] .github-package-tree-node.selected,
+html[data-theme="dark"] .github-package-tree-node.resolving {
+  border-color: rgba(45, 212, 191, 0.56);
+  background: rgba(45, 212, 191, 0.12);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+}
+
+html[data-theme="dark"] .github-package-tree-dot {
+  background: #8ba3b5;
+  box-shadow: 0 0 0 2px #121c26;
+}
+
+html[data-theme="dark"] .github-package-tree-dot.repo-risk-critical,
+html[data-theme="dark"] .github-package-tree-dot.repo-risk-high {
+  background: #fb7185;
+}
+
+html[data-theme="dark"] .github-package-tree-dot.repo-risk-medium,
+html[data-theme="dark"] .github-package-tree-dot.repo-risk-advisory {
+  background: #fbbf24;
+}
+
+html[data-theme="dark"] .github-package-tree-dot.repo-risk-low {
+  background: #34d399;
+}
+
+html[data-theme="dark"] .github-package-tree-status {
+  border-color: #344454;
+  background: #17212b;
+  color: #cbd5e1;
+}
+
+html[data-theme="dark"] .github-package-tree-status.clean {
+  border-color: rgba(52, 211, 153, 0.34);
+  background: rgba(6, 78, 59, 0.32);
+  color: #34d399;
+}
+
+html[data-theme="dark"] .github-package-tree-status.unresolved,
+html[data-theme="dark"] .github-package-tree-status.vulnerable.repo-risk-medium,
+html[data-theme="dark"] .github-package-tree-status.vulnerable.repo-risk-advisory {
+  border-color: rgba(251, 191, 36, 0.38);
+  background: rgba(120, 53, 15, 0.34);
+  color: #fbbf24;
+}
+
+html[data-theme="dark"] .github-package-tree-status.vulnerable.repo-risk-critical,
+html[data-theme="dark"] .github-package-tree-status.vulnerable.repo-risk-high {
+  border-color: rgba(248, 113, 113, 0.42);
+  background: rgba(127, 29, 29, 0.42);
+  color: #fca5a5;
+}
+
 html[data-theme="dark"] .github-package-detail {
   background:
     linear-gradient(180deg, rgba(20, 29, 38, 0.98), rgba(14, 22, 31, 0.98)),
@@ -5392,6 +5775,59 @@ html[data-theme="dark"] .cvss-vector {
   color: var(--text-color);
 }
 
+html[data-theme="dark"] .package-chain-actions {
+  border-color: #2f3e4c;
+  background: rgba(15, 23, 32, 0.88);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.26);
+}
+
+html[data-theme="dark"] .package-chain-button {
+  border-color: #344454;
+  background: #121c26;
+  color: #e5eef6;
+}
+
+html[data-theme="dark"] .package-chain-button.primary {
+  border-color: rgba(45, 212, 191, 0.48);
+  background: #0f766e;
+  color: #ecfeff;
+}
+
+html[data-theme="dark"] .package-chain-button.secondary {
+  color: #9db1c2;
+}
+
+html[data-theme="dark"] .package-chain-button.danger {
+  border-color: rgba(248, 113, 113, 0.44);
+  background: #991b1b;
+  color: #fff1f2;
+}
+
+html[data-theme="dark"] .package-chain-status {
+  color: #9db1c2;
+}
+
+html[data-theme="dark"] .package-chain-status.warning {
+  color: #fbbf24;
+}
+
+html[data-theme="dark"] .dependency-resolving-row {
+  border-color: rgba(45, 212, 191, 0.42);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.22);
+}
+
+html[data-theme="dark"] .dependency-chain-badge {
+  border-color: rgba(45, 212, 191, 0.34);
+  background: rgba(45, 212, 191, 0.1);
+  color: #5eead4;
+}
+
+html[data-theme="dark"] .dependency-chain-badge.warning {
+  border-color: rgba(251, 191, 36, 0.38);
+  background: rgba(120, 53, 15, 0.34);
+  color: #fbbf24;
+}
+
 html[data-theme="dark"] .cve-results-header,
 html[data-theme="dark"] .cve-meta-panel div {
   border-color: #26323d;
@@ -5461,13 +5897,19 @@ html[data-theme="dark"] .dependency-root-row {
 }
 
 html[data-theme="dark"] .dependency-risk-row {
-  border-color: rgba(255, 107, 107, 0.3);
-  background: rgba(255, 107, 107, 0.08);
-  box-shadow: inset 3px 0 0 rgba(255, 107, 107, 0.5);
+  border-color: #2f3e4c;
+  background: transparent;
+  box-shadow: none;
+}
+
+html[data-theme="dark"] .dependency-root-row.dependency-risk-row {
+  border-color: #2f3e4c;
+  background: #121c26;
+  box-shadow: inset 3px 0 0 rgba(45, 212, 191, 0.44);
 }
 
 html[data-theme="dark"] .dependency-risk-row > .dep-name {
-  color: #fecaca;
+  color: var(--text-color);
 }
 
 html[data-theme="dark"] .security-overview .finding-list > li {
