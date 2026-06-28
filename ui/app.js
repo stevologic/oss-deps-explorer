@@ -251,6 +251,161 @@ const wellKnownPackages = {
   ],
 };
 
+const permissiveLicenseIds = new Set([
+  "0BSD",
+  "AFL-2.1",
+  "AFL-3.0",
+  "Apache-1.1",
+  "Apache-2.0",
+  "Artistic-2.0",
+  "BlueOak-1.0.0",
+  "BSD-2-Clause",
+  "BSD-2-Clause-FreeBSD",
+  "BSD-2-Clause-Patent",
+  "BSD-3-Clause",
+  "BSD-3-Clause-Clear",
+  "BSD-4-Clause",
+  "BSL-1.0",
+  "CC0-1.0",
+  "ISC",
+  "MIT",
+  "MIT-0",
+  "MulanPSL-2.0",
+  "NCSA",
+  "OFL-1.1",
+  "PostgreSQL",
+  "Python-2.0",
+  "Unlicense",
+  "WTFPL",
+  "Zlib",
+]);
+
+const copyleftLicensePrefixes = ["AGPL-", "GPL-", "LGPL-"];
+const reciprocalLicensePrefixes = [
+  "CDDL-",
+  "CPL-",
+  "EPL-",
+  "EUPL-",
+  "MPL-",
+  "OSL-",
+];
+const reviewLicenseIds = new Set([
+  "BSD-3-Clause-No-Nuclear-License",
+  "CC-BY-NC-4.0",
+  "LicenseRef-scancode-proprietary-license",
+  "NONE",
+  "NOASSERTION",
+  "UNLICENSED",
+]);
+
+const githubLicenseExpressionTokens = (expression) =>
+  String(expression || "")
+    .replace(/[(),]/g, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(
+      (token) =>
+        token &&
+        !["AND", "OR", "WITH"].includes(token.toUpperCase()),
+    );
+
+const isLicenseExceptionToken = (token) => /exception/i.test(token);
+const hasLicensePrefix = (token, prefixes) =>
+  prefixes.some((prefix) => token.toUpperCase().startsWith(prefix));
+const isCopyleftLicenseToken = (token) =>
+  hasLicensePrefix(token, copyleftLicensePrefixes);
+const isReciprocalLicenseToken = (token) =>
+  hasLicensePrefix(token, reciprocalLicensePrefixes);
+const isPermissiveLicenseToken = (token) =>
+  permissiveLicenseIds.has(token.replace(/\+$/, ""));
+const isReviewLicenseToken = (token) => {
+  const normalized = token.replace(/\+$/, "");
+  return (
+    reviewLicenseIds.has(normalized) ||
+    /^LicenseRef-/i.test(normalized) ||
+    /^SEE-?LICENSE-?IN/i.test(normalized)
+  );
+};
+
+const githubLicensePolicyFromExpression = (expression) => {
+  const license = String(expression || "").trim();
+  if (!license) {
+    return {
+      status: "missing",
+      label: "Missing SPDX",
+      shortLabel: "Missing",
+      detail: "No SPDX license metadata was returned by GitHub.",
+    };
+  }
+  const tokens = githubLicenseExpressionTokens(license);
+  if (tokens.length === 0) {
+    return {
+      status: "missing",
+      label: "Missing SPDX",
+      shortLabel: "Missing",
+      detail: "No SPDX license metadata was returned by GitHub.",
+    };
+  }
+
+  const hasCopyleft = tokens.some(isCopyleftLicenseToken);
+  const hasReciprocal = tokens.some(isReciprocalLicenseToken);
+  const hasReview = tokens.some(isReviewLicenseToken);
+  const hasPermissive = tokens.some(isPermissiveLicenseToken);
+  const hasChoice = /\bOR\b/i.test(license);
+
+  if (hasReview) {
+    return {
+      status: "review",
+      label: "Needs review",
+      shortLabel: "Review",
+      detail: `${license} uses custom, proprietary, or unresolved license metadata.`,
+    };
+  }
+  if (hasCopyleft && hasChoice && hasPermissive) {
+    return {
+      status: "review",
+      label: "Dual-license review",
+      shortLabel: "Review",
+      detail: `${license} includes a copyleft option and should be reviewed before use.`,
+    };
+  }
+  if (hasCopyleft) {
+    return {
+      status: "copyleft",
+      label: "Copyleft",
+      shortLabel: "Copyleft",
+      detail: `${license} includes GPL-family copyleft terms.`,
+    };
+  }
+  if (hasReciprocal) {
+    return {
+      status: "review",
+      label: "Reciprocal review",
+      shortLabel: "Review",
+      detail: `${license} includes reciprocal license terms that may need policy review.`,
+    };
+  }
+  if (
+    tokens.every(
+      (token) =>
+        isPermissiveLicenseToken(token) || isLicenseExceptionToken(token),
+    )
+  ) {
+    return {
+      status: "permissive",
+      label: "Permissive",
+      shortLabel: "Permissive",
+      detail: `${license} is commonly treated as permissive.`,
+    };
+  }
+  return {
+    status: "review",
+    label: "Needs review",
+    shortLabel: "Review",
+    detail: `${license} is not in the built-in permissive license allowlist.`,
+  };
+};
+
 function App() {
   const apiOrigin =
     window.location.port === "8081"
@@ -941,7 +1096,7 @@ function App() {
     document.body.appendChild(link);
     link.click();
     link.remove();
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   const csvValue = (value) => {
@@ -1792,6 +1947,9 @@ function App() {
     String(pkg?.license || pkg?.license_concluded || pkg?.license_declared || "")
       .trim();
 
+  const githubPackageLicensePolicy = (pkg) =>
+    githubLicensePolicyFromExpression(githubPackageLicense(pkg));
+
   const githubPackageLicenseTitle = (pkg) => {
     const concluded = String(pkg?.license_concluded || "").trim();
     const declared = String(pkg?.license_declared || "").trim();
@@ -1830,13 +1988,17 @@ function App() {
       .filter((part) => part !== undefined && part !== null)
       .join("|");
 
-  const githubPackageSearchText = (pkg) =>
-    [
+  const githubPackageSearchText = (pkg) => {
+    const policy = githubPackageLicensePolicy(pkg);
+    return [
       githubPackageLabel(pkg),
       pkg.version,
       pkg.manager,
       pmDisplayNames[pkg.manager],
       githubPackageLicense(pkg),
+      policy.label,
+      policy.status,
+      policy.detail,
       pkg.license_concluded,
       pkg.license_declared,
       pkg.purl,
@@ -1845,6 +2007,7 @@ function App() {
       .filter(Boolean)
       .join(" ")
       .toLowerCase();
+  };
 
   const applyPackageSuggestion = (pkg) => {
     if (Date.now() < packageSuggestionSuppressUntilRef.current) return;
@@ -4925,6 +5088,15 @@ function App() {
     if (githubRepoStatusFilter.startsWith("manager:")) {
       return pkg.manager === githubRepoStatusFilter.slice("manager:".length);
     }
+    if (githubRepoStatusFilter === "license-policy:needs-review") {
+      return githubPackageLicensePolicy(pkg).status !== "permissive";
+    }
+    if (githubRepoStatusFilter.startsWith("license-policy:")) {
+      return (
+        githubPackageLicensePolicy(pkg).status ===
+        githubRepoStatusFilter.slice("license-policy:".length)
+      );
+    }
     if (githubRepoStatusFilter === "license:missing") {
       return !githubPackageLicense(pkg);
     }
@@ -4984,9 +5156,17 @@ function App() {
     if (license) acc[license] = (acc[license] || 0) + 1;
     return acc;
   }, {});
-  const githubRepoMissingLicenseCount = githubRepoPackages.filter(
-    (pkg) => !githubPackageLicense(pkg),
-  ).length;
+  const githubRepoLicensePolicyCounts = githubRepoPackages.reduce((acc, pkg) => {
+    const policy = githubPackageLicensePolicy(pkg);
+    acc[policy.status] = (acc[policy.status] || 0) + 1;
+    return acc;
+  }, {});
+  const githubRepoMissingLicenseCount =
+    githubRepoLicensePolicyCounts.missing || 0;
+  const githubRepoLicenseReviewCount =
+    (githubRepoLicensePolicyCounts.copyleft || 0) +
+    (githubRepoLicensePolicyCounts.review || 0) +
+    githubRepoMissingLicenseCount;
   const githubRepoTopLicenses = Object.entries(githubRepoLicenseCounts)
     .sort(([aLicense, aCount], [bLicense, bCount]) => {
       if (bCount !== aCount) return bCount - aCount;
@@ -5296,6 +5476,7 @@ function App() {
   const githubRepoCycloneDxComponent = (pkg) => {
     const displayName = githubPackageLabel(pkg);
     const purl = pkg.purl || packagePurl(pkg.manager, displayName, pkg.version);
+    const licensePolicy = githubPackageLicensePolicy(pkg);
     const component = {
       type: "library",
       "bom-ref": purl,
@@ -5310,6 +5491,14 @@ function App() {
         {
           name: "oss-deps-explorer:osv-status",
           value: githubRepoPackageVulnRecord(pkg)?.status || "not_checked",
+        },
+        {
+          name: "oss-deps-explorer:license-policy",
+          value: licensePolicy.status,
+        },
+        {
+          name: "oss-deps-explorer:license-policy-detail",
+          value: licensePolicy.detail,
         },
       ],
     };
@@ -5447,6 +5636,8 @@ function App() {
         "license",
         "license_concluded",
         "license_declared",
+        "license_policy",
+        "license_policy_detail",
         "osv_status",
         "risk",
         "score",
@@ -5455,6 +5646,7 @@ function App() {
       ],
       ...filteredGithubRepoPackages.map((pkg) => {
         const record = githubRepoPackageVulnRecord(pkg);
+        const licensePolicy = githubPackageLicensePolicy(pkg);
         return [
           githubRepoResult.repository || "",
           pkg.manager || "",
@@ -5465,6 +5657,8 @@ function App() {
           githubPackageLicense(pkg),
           pkg.license_concluded || "",
           pkg.license_declared || "",
+          licensePolicy.status,
+          licensePolicy.detail,
           record?.status || "not_checked",
           record?.risk || "",
           record?.score ?? "",
@@ -5479,8 +5673,174 @@ function App() {
       rows.map((row) => row.map(csvValue).join(",")).join("\n"),
     );
   };
+  const githubRepoGraphVizColor = (record, policy) => {
+    if (record?.status === "vulnerable") {
+      if (record.risk === "critical") return "#ef4444";
+      if (record.risk === "high") return "#f97316";
+      if (record.risk === "medium") return "#f59e0b";
+      if (record.risk === "low") return "#facc15";
+      return "#fb7185";
+    }
+    if (record?.status === "no_advisory") return "#22c55e";
+    if (record?.status === "unknown") return "#d4a83a";
+    if (policy?.status === "copyleft") return "#fecaca";
+    if (policy?.status === "review" || policy?.status === "missing") {
+      return "#fde68a";
+    }
+    return "#94a3b8";
+  };
+  const githubRepoGraphVizNodeAttrs = (pkg, scope) => {
+    const label = githubPackageLabel(pkg);
+    const record = githubRepoPackageVulnRecord(pkg);
+    const policy = githubPackageLicensePolicy(pkg);
+    return [
+      `label=${dotQuote(`${label}\\n${pkg.version || ""}`)}`,
+      `fillcolor=${dotQuote(githubRepoGraphVizColor(record, policy))}`,
+      `scope=${dotQuote(scope)}`,
+      `package_manager=${dotQuote(pkg.manager || "")}`,
+      `version=${dotQuote(pkg.version || "")}`,
+      `purl=${dotQuote(pkg.purl || packagePurl(pkg.manager, label, pkg.version || ""))}`,
+      `license=${dotQuote(githubPackageLicense(pkg))}`,
+      `license_policy=${dotQuote(policy.status)}`,
+      `osv_status=${dotQuote(record?.status || "not_checked")}`,
+      `risk=${dotQuote(record?.risk || "")}`,
+      `score=${dotQuote(record?.score ?? "")}`,
+      `advisory_count=${dotQuote(record?.advisoryCount ?? "")}`,
+    ];
+  };
+  const buildGithubRepoGraphVizDot = () => {
+    const rootId = `repository:${githubRepoResult?.repository || "repository"}`;
+    const nodes = new Map();
+    const edges = new Map();
+    const addNode = (id, attrs) => {
+      if (!id || nodes.has(id)) return;
+      nodes.set(id, attrs);
+    };
+    const addEdge = (from, to, kind) => {
+      if (!from || !to) return;
+      const key = `${from}\u0000${to}\u0000${kind || ""}`;
+      edges.set(key, { from, to, kind });
+    };
+    const transitiveNodeId = (managerKey, packageName, versionValue) =>
+      `transitive:${managerKey}:${packageName}@${versionValue || ""}`;
+
+    addNode(rootId, [
+      `label=${dotQuote(`${githubRepoResult?.repository || "Repository"}\\nRepository import`)}`,
+      `fillcolor=${dotQuote("#0f6970")}`,
+      `scope=${dotQuote("repository")}`,
+    ]);
+
+    const managers = Array.from(
+      new Set(filteredGithubRepoPackages.map((pkg) => pkg.manager || "unknown")),
+    ).sort((a, b) => a.localeCompare(b));
+    managers.forEach((mgr) => {
+      const managerId = `manager:${mgr}`;
+      addNode(managerId, [
+        `label=${dotQuote(pmDisplayNames[mgr] || mgr)}`,
+        `fillcolor=${dotQuote("#dbeafe")}`,
+        `scope=${dotQuote("manager")}`,
+        `package_manager=${dotQuote(mgr)}`,
+      ]);
+      addEdge(rootId, managerId, "manager");
+    });
+
+    const packageNodeByKey = new Map();
+    filteredGithubRepoPackages.forEach((pkg, index) => {
+      const key = githubRepoPackageKey(pkg);
+      const identityKey = githubRepoPackageIdentityKey(pkg);
+      const fallbackKey = `${pkg.manager || "pkg"}:${githubPackageLabel(pkg)}@${pkg.version || ""}:${index}`;
+      const packageNodeId = `package:${identityKey || key || fallbackKey}`;
+      if (key) packageNodeByKey.set(key, packageNodeId);
+      addNode(packageNodeId, githubRepoGraphVizNodeAttrs(pkg, "direct"));
+      addEdge(`manager:${pkg.manager || "unknown"}`, packageNodeId, "package");
+    });
+
+    filteredGithubRepoPackages.forEach((pkg) => {
+      const rootKey = githubRepoPackageKey(pkg);
+      const expansion = rootKey ? githubRepoTransitiveDeps[rootKey] : null;
+      const rootNodeId = rootKey ? packageNodeByKey.get(rootKey) : "";
+      if (!expansion || expansion.failed || !rootNodeId) return;
+      const dependencies = expansion.dependencies || {};
+      const parents = expansion.parents || {};
+      Object.entries(dependencies)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .forEach(([depName, depVersion]) => {
+          if (!depName || depName === expansion.rootPackageName) return;
+          const depPkg = githubRepoPackageFromFormattedName(
+            expansion.manager,
+            depName,
+            depVersion,
+          );
+          const depNodeId = transitiveNodeId(expansion.manager, depName, depVersion);
+          addNode(depNodeId, githubRepoGraphVizNodeAttrs(depPkg, "transitive"));
+          const parentValues = Array.isArray(parents[depName])
+            ? parents[depName]
+            : [parents[depName] || ""];
+          parentValues.forEach((parentName) => {
+            const parentVersion = dependencies[parentName];
+            const source =
+              parentName &&
+              parentName !== expansion.rootPackageName &&
+              parentVersion !== undefined
+                ? transitiveNodeId(expansion.manager, parentName, parentVersion)
+                : rootNodeId;
+            addEdge(source, depNodeId, "transitive");
+          });
+        });
+    });
+
+    const lines = [
+      "digraph github_repository_dependencies {",
+      "    graph [rankdir=LR]",
+      "    node [shape=box style=\"rounded,filled\" fontname=\"Inter, Arial\"]",
+      "    edge [color=\"#64748b\"]",
+    ];
+    Array.from(nodes.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .forEach(([id, attrs]) => {
+        lines.push(`    ${dotQuote(id)} [${attrs.join(" ")}]`);
+      });
+    Array.from(edges.values())
+      .sort((a, b) =>
+        a.from === b.from ? a.to.localeCompare(b.to) : a.from.localeCompare(b.from),
+      )
+      .forEach((edge) => {
+        lines.push(
+          `    ${dotQuote(edge.from)} -> ${dotQuote(edge.to)} [kind=${dotQuote(edge.kind)}]`,
+        );
+      });
+    lines.push("    subgraph cluster_legend {");
+    lines.push(`        label=${dotQuote("Repository import status")}`);
+    lines.push(`        color=${dotQuote("#cbd5e1")}`);
+    lines.push(`        style=${dotQuote("rounded")}`);
+    [
+      ["vulnerable", "#fb7185"],
+      ["no OSV advisory", "#22c55e"],
+      ["unresolved OSV", "#d4a83a"],
+      ["license review", "#fde68a"],
+      ["not checked", "#94a3b8"],
+    ].forEach(([label, color], index) => {
+      lines.push(
+        `        ${dotQuote(`__repo_legend_${index}`)} [label=${dotQuote(label)} style=${dotQuote("filled")} fillcolor=${dotQuote(color)}]`,
+      );
+    });
+    lines.push("    }");
+    lines.push("}");
+    return `${lines.join("\n")}\n`;
+  };
+  const exportGithubRepoGraphViz = () => {
+    if (!githubRepoResult || filteredGithubRepoPackages.length === 0) return;
+    downloadText(
+      `${githubRepoExportBaseName()}-repository-graph.dot`,
+      "text/vnd.graphviz",
+      buildGithubRepoGraphVizDot(),
+    );
+  };
   const previewGithubRepoVuln = previewGithubRepoPackage
     ? githubRepoPackageVulnRecord(previewGithubRepoPackage)
+    : null;
+  const previewGithubRepoLicensePolicy = previewGithubRepoPackage
+    ? githubPackageLicensePolicy(previewGithubRepoPackage)
     : null;
   const applyGithubRepoStatusFilter = (filter) => {
     const nextFilter =
@@ -5500,6 +5860,7 @@ function App() {
           active && "active",
           options.risk && "github-import-risk-stat",
           options.high && "high",
+          options.policy && "github-import-policy-stat",
         ]
           .filter(Boolean)
           .join(" "),
@@ -8071,6 +8432,39 @@ function App() {
                             title: "Show high and critical vulnerable packages",
                           },
                         ),
+                      githubRepoLicenseReviewCount > 0 &&
+                        githubRepoSummaryFilterButton(
+                          "license-policy:needs-review",
+                          `${githubRepoLicenseReviewCount} license review`,
+                          {
+                            key: "repo-license-policy-review",
+                            policy: true,
+                            title:
+                              "Show packages with copyleft, missing, custom, or non-allowlisted license metadata",
+                          },
+                        ),
+                      (githubRepoLicensePolicyCounts.copyleft || 0) > 0 &&
+                        githubRepoSummaryFilterButton(
+                          "license-policy:copyleft",
+                          `${githubRepoLicensePolicyCounts.copyleft} copyleft`,
+                          {
+                            key: "repo-license-policy-copyleft",
+                            high: true,
+                            policy: true,
+                            title: "Show packages with GPL-family copyleft licenses",
+                          },
+                        ),
+                      (githubRepoLicensePolicyCounts.permissive || 0) > 0 &&
+                        githubRepoSummaryFilterButton(
+                          "license-policy:permissive",
+                          `${githubRepoLicensePolicyCounts.permissive} permissive`,
+                          {
+                            key: "repo-license-policy-permissive",
+                            policy: true,
+                            title:
+                              "Show packages with licenses in the built-in permissive allowlist",
+                          },
+                        ),
                       githubRepoCheckedCount > 0 &&
                         githubRepoSummaryFilterButton(
                           "checked",
@@ -8188,6 +8582,8 @@ function App() {
                               const riskClass =
                                 githubRepoPackageRiskClass(vulnRecord);
                               const license = githubPackageLicense(pkg);
+                              const licensePolicy =
+                                githubPackageLicensePolicy(pkg);
                               const isSelected =
                                 packageIdentityKey &&
                                 packageIdentityKey === selectedGithubRepoPackageKey;
@@ -8235,6 +8631,15 @@ function App() {
                                         title: githubPackageLicenseTitle(pkg),
                                       },
                                       license,
+                                    ),
+                                  licensePolicy.status !== "permissive" &&
+                                    e(
+                                      "span",
+                                      {
+                                        className: `github-package-policy-badge ${licensePolicy.status}`,
+                                        title: licensePolicy.detail,
+                                      },
+                                      licensePolicy.shortLabel,
                                     ),
                                 ),
                                 e(
@@ -8296,6 +8701,18 @@ function App() {
                                 : "Expand the graph to the full site workspace",
                             },
                             githubRepoGraphExpanded ? "Collapse" : "Expand",
+                          ),
+                          e(
+                            "button",
+                            {
+                              type: "button",
+                              className: "repo-graph-action-button",
+                              onClick: exportGithubRepoGraphViz,
+                              disabled: filteredGithubRepoPackages.length === 0,
+                              title:
+                                "Export the filtered repository graph as GraphViz DOT, including resolved transitive edges",
+                            },
+                            "Export DOT",
                           ),
                           e(
                             "button",
@@ -8505,6 +8922,28 @@ function App() {
                                   },
                                   githubPackageLicense(previewGithubRepoPackage) ||
                                     "Missing",
+                                ),
+                              ),
+                              e(
+                                "div",
+                                { className: "github-package-detail-item" },
+                                e(
+                                  "span",
+                                  { className: "github-package-detail-label" },
+                                  "Policy",
+                                ),
+                                e(
+                                  "strong",
+                                  {
+                                    className: `github-package-policy-pill ${
+                                      previewGithubRepoLicensePolicy?.status ||
+                                      "missing"
+                                    }`,
+                                    title:
+                                      previewGithubRepoLicensePolicy?.detail || "",
+                                  },
+                                  previewGithubRepoLicensePolicy?.label ||
+                                    "Missing SPDX",
                                 ),
                               ),
                               e(

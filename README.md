@@ -307,9 +307,14 @@ SPDX SBOM includes `licenseConcluded` or `licenseDeclared`, with `license`
 preferring the concluded value and falling back to the declared value. The UI
 repository import view exposes license summary filters, license chips on
 packages, missing-license isolation, and filtered CSV inventory exports with
-license and OSV triage columns for compliance handoff. The same filtered
+license, license-policy, and OSV triage columns for compliance handoff. License
+policy filters flag copyleft, missing, custom, and non-allowlisted SPDX
+expressions so legal review queues can be isolated quickly. The same filtered
 repository package view can also export CycloneDX JSON with GitHub license
-metadata and OSV status properties for SBOM workflows.
+metadata, license-policy properties, and OSV status properties for SBOM
+workflows. The repository graph toolbar exports the filtered graph as GraphViz
+DOT, including resolved transitive edges, license-policy attributes, and OSV
+status attributes for architecture and compliance review.
 
 Example:
 
