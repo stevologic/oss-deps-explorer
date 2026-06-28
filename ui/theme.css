@@ -944,6 +944,15 @@ button.github-import-stat:focus-visible {
   gap: 6px;
 }
 
+.github-package-list-header .github-package-list-actions {
+  flex: 0 0 auto;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .github-package-list-header strong,
 .github-repo-graph-header strong {
   line-height: 1.2;
@@ -1387,6 +1396,29 @@ button.github-import-stat:focus-visible {
   color: #6b5310;
 }
 
+.github-package-license-pill {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  min-height: 24px;
+  max-width: 100%;
+  padding: 3px 8px;
+  border: 1px solid rgba(15, 105, 112, 0.28);
+  border-radius: 999px;
+  background: rgba(15, 105, 112, 0.1);
+  color: #0f6970;
+  font-size: 0.72rem;
+  font-weight: 900;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.github-package-license-pill.missing {
+  border-color: rgba(181, 107, 0, 0.34);
+  background: #fff4d6;
+  color: #7a4b00;
+}
+
 .github-package-detail-actions {
   display: flex;
   align-items: center;
@@ -1483,6 +1515,26 @@ button.github-import-stat:focus-visible {
   font-weight: 800;
   line-height: 1.1;
   text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.github-package-license-badge {
+  flex: 0 1 auto;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 120px;
+  min-height: 19px;
+  padding: 2px 5px;
+  border: 1px solid rgba(15, 105, 112, 0.28);
+  border-radius: 4px;
+  background: rgba(15, 105, 112, 0.08);
+  color: #0f6970;
+  font-size: 0.66rem;
+  font-weight: 800;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -5546,6 +5598,19 @@ html[data-theme="dark"] .github-package-security-pill.repo-risk-low {
   border-color: rgba(52, 211, 153, 0.36);
   background: rgba(6, 78, 59, 0.34);
   color: #34d399;
+}
+
+html[data-theme="dark"] .github-package-license-badge,
+html[data-theme="dark"] .github-package-license-pill {
+  border-color: rgba(45, 212, 191, 0.34);
+  background: rgba(20, 184, 166, 0.14);
+  color: #67e8d6;
+}
+
+html[data-theme="dark"] .github-package-license-pill.missing {
+  border-color: rgba(251, 191, 36, 0.38);
+  background: rgba(120, 53, 15, 0.34);
+  color: #fbbf24;
 }
 
 html[data-theme="dark"] .github-package-card.repo-risk-critical,
