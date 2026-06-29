@@ -519,6 +519,8 @@ function App() {
   const [submittedManager, setSubmittedManager] = React.useState(manager);
   const [shareStatus, setShareStatus] = React.useState("");
   const shareStatusTimerRef = React.useRef(null);
+  const [githubRepoBriefStatus, setGithubRepoBriefStatus] = React.useState("");
+  const githubRepoBriefStatusTimerRef = React.useRef(null);
   const [repos, setRepos] = React.useState({});
   const [repoMeta, setRepoMeta] = React.useState({});
   const [formSubmitted, setFormSubmitted] = React.useState(false);
@@ -1850,6 +1852,9 @@ function App() {
     () => () => {
       if (shareStatusTimerRef.current) {
         clearTimeout(shareStatusTimerRef.current);
+      }
+      if (githubRepoBriefStatusTimerRef.current) {
+        clearTimeout(githubRepoBriefStatusTimerRef.current);
       }
       if (packageSuggestionSuppressTimerRef.current) {
         clearTimeout(packageSuggestionSuppressTimerRef.current);
@@ -5161,12 +5166,26 @@ function App() {
     acc[policy.status] = (acc[policy.status] || 0) + 1;
     return acc;
   }, {});
+  const filteredGithubRepoLicensePolicyCounts = filteredGithubRepoPackages.reduce(
+    (acc, pkg) => {
+      const policy = githubPackageLicensePolicy(pkg);
+      acc[policy.status] = (acc[policy.status] || 0) + 1;
+      return acc;
+    },
+    {},
+  );
   const githubRepoMissingLicenseCount =
     githubRepoLicensePolicyCounts.missing || 0;
   const githubRepoLicenseReviewCount =
     (githubRepoLicensePolicyCounts.copyleft || 0) +
     (githubRepoLicensePolicyCounts.review || 0) +
     githubRepoMissingLicenseCount;
+  const filteredGithubRepoMissingLicenseCount =
+    filteredGithubRepoLicensePolicyCounts.missing || 0;
+  const filteredGithubRepoLicenseReviewCount =
+    (filteredGithubRepoLicensePolicyCounts.copyleft || 0) +
+    (filteredGithubRepoLicensePolicyCounts.review || 0) +
+    filteredGithubRepoMissingLicenseCount;
   const githubRepoTopLicenses = Object.entries(githubRepoLicenseCounts)
     .sort(([aLicense, aCount], [bLicense, bCount]) => {
       if (bCount !== aCount) return bCount - aCount;
@@ -5223,6 +5242,11 @@ function App() {
   const githubRepoAllRootCandidates = githubRepoPackages.filter((pkg) =>
     githubRepoDependencyApiUrl(pkg),
   );
+  const githubRepoFilteredResolvedRootCount =
+    githubRepoTransitiveRootCandidates.filter((pkg) =>
+      Boolean(githubRepoTransitiveDeps[githubRepoPackageKey(pkg)]),
+    ).length;
+  const githubRepoFilteredRootCount = githubRepoTransitiveRootCandidates.length;
   const githubRepoVisibleRootKeys = new Set(
     filteredGithubRepoPackages.map(githubRepoPackageKey).filter(Boolean),
   );
@@ -5452,8 +5476,9 @@ function App() {
     }
     return { checked, vulnerable };
   };
-  const githubRepoVulnRecords = Array.from(
-    githubRepoPackages
+  const githubRepoVulnRecordsForPackages = (packages) =>
+    Array.from(
+      packages
       .reduce((records, pkg) => {
         const key = githubRepoPackageIdentityKey(pkg) || githubRepoPackageKey(pkg);
         const record = githubRepoPackageVulnRecord(pkg);
@@ -5461,6 +5486,12 @@ function App() {
         return records;
       }, new Map())
       .values(),
+    );
+  const githubRepoVulnRecords = githubRepoVulnRecordsForPackages(
+    githubRepoPackages,
+  );
+  const filteredGithubRepoVulnRecords = githubRepoVulnRecordsForPackages(
+    filteredGithubRepoPackages,
   );
   const githubRepoCheckedCount = githubRepoVulnRecords.filter((record) =>
     ["vulnerable", "no_advisory"].includes(record.status),
@@ -5469,6 +5500,17 @@ function App() {
     (record) => record.status === "vulnerable",
   ).length;
   const githubRepoHighRiskCount = githubRepoVulnRecords.filter(
+    (record) =>
+      record.status === "vulnerable" &&
+      (riskRank[record.risk] || 0) >= riskRank.high,
+  ).length;
+  const filteredGithubRepoCheckedCount = filteredGithubRepoVulnRecords.filter(
+    (record) => ["vulnerable", "no_advisory"].includes(record.status),
+  ).length;
+  const filteredGithubRepoVulnerableCount = filteredGithubRepoVulnRecords.filter(
+    (record) => record.status === "vulnerable",
+  ).length;
+  const filteredGithubRepoHighRiskCount = filteredGithubRepoVulnRecords.filter(
     (record) =>
       record.status === "vulnerable" &&
       (riskRank[record.risk] || 0) >= riskRank.high,
@@ -5613,6 +5655,161 @@ function App() {
       .replace(/[^a-z0-9._-]+/gi, "-")
       .replace(/^-+|-+$/g, "")
       .toLowerCase() || "repository";
+
+  const githubRepoActiveFilterLabel = () => {
+    let label = "all supported packages";
+    if (githubRepoStatusFilter === "skipped") {
+      label = "skipped dependencies";
+    } else if (githubRepoStatusFilter === "license-policy:needs-review") {
+      label = "license review packages";
+    } else if (githubRepoStatusFilter.startsWith("license-policy:")) {
+      label = `${githubRepoStatusFilter.slice("license-policy:".length)} license policy`;
+    } else if (githubRepoStatusFilter === "license:missing") {
+      label = "missing license";
+    } else if (githubRepoStatusFilter.startsWith("license:")) {
+      label = `${githubRepoStatusFilter.slice("license:".length)} license`;
+    } else if (githubRepoStatusFilter.startsWith("manager:")) {
+      const mgr = githubRepoStatusFilter.slice("manager:".length);
+      label = `${pmDisplayNames[mgr] || mgr} packages`;
+    } else if (githubRepoStatusFilter === "vulnerable") {
+      label = "vulnerable packages";
+    } else if (githubRepoStatusFilter === "osv-findings") {
+      label = "OSV findings";
+    } else if (githubRepoStatusFilter === "high") {
+      label = "high or critical findings";
+    } else if (githubRepoStatusFilter === "checked") {
+      label = "OSV checked packages";
+    } else if (githubRepoStatusFilter !== "all") {
+      label = githubRepoStatusFilter;
+    }
+    const query = githubRepoFilter.trim();
+    return query ? `${label} matching "${query}"` : label;
+  };
+
+  const githubRepoPackageBriefLabel = (pkg) => {
+    const versionValue = pkg.version ? `@${pkg.version}` : "";
+    const managerLabel = pmDisplayNames[pkg.manager] || pkg.manager || "package";
+    return `${githubPackageLabel(pkg)}${versionValue} (${managerLabel})`;
+  };
+
+  const buildGithubRepoAuditBrief = () => {
+    const reviewRows = filteredGithubRepoPackages
+      .map((pkg) => ({
+        pkg,
+        policy: githubPackageLicensePolicy(pkg),
+      }))
+      .filter(({ policy }) => policy.status !== "permissive")
+      .sort((a, b) => {
+        const policyRank = { copyleft: 4, review: 3, missing: 2, permissive: 1 };
+        return (
+          (policyRank[b.policy.status] || 0) -
+            (policyRank[a.policy.status] || 0) ||
+          githubPackageLabel(a.pkg).localeCompare(githubPackageLabel(b.pkg))
+        );
+      })
+      .slice(0, 10);
+    const vulnerableRows = filteredGithubRepoPackages
+      .map((pkg) => ({ pkg, record: githubRepoPackageVulnRecord(pkg) }))
+      .filter(({ record }) => record?.status === "vulnerable")
+      .sort(
+        (a, b) =>
+          (riskRank[b.record.risk] || 0) - (riskRank[a.record.risk] || 0) ||
+          (Number(b.record.score) || 0) - (Number(a.record.score) || 0) ||
+          githubPackageLabel(a.pkg).localeCompare(githubPackageLabel(b.pkg)),
+      )
+      .slice(0, 10);
+    const licenseProjectSuffix =
+      filteredGithubRepoPackages.length === githubRepoPackages.length
+        ? ""
+        : `; project total ${formatNumber(githubRepoLicenseReviewCount)}`;
+    const osvProjectSuffix =
+      filteredGithubRepoPackages.length === githubRepoPackages.length
+        ? ""
+        : `; project total ${formatNumber(githubRepoVulnerableCount)} vulnerable, ${formatNumber(githubRepoHighRiskCount)} high or critical`;
+    const chainProjectSuffix =
+      githubRepoFilteredRootCount === githubRepoProjectRootCount
+        ? ""
+        : `; project total ${formatNumber(githubRepoResolvedProjectRootCount)} of ${formatNumber(githubRepoProjectRootCount)} roots resolved`;
+    const lines = [
+      `# OSS dependency brief: ${githubRepoResult?.repository || "repository"}`,
+      "",
+      `- Source: GitHub dependency graph SBOM`,
+      `- Active view: ${githubRepoActiveFilterLabel()}; ${formatNumber(filteredGithubRepoPackages.length)} of ${formatNumber(githubRepoPackages.length)} supported packages`,
+      `- Unsupported packages: ${formatNumber(githubRepoResult?.unsupported_count || 0)}`,
+      `- License review: ${formatNumber(filteredGithubRepoLicenseReviewCount)} in active view (${formatNumber(filteredGithubRepoLicensePolicyCounts.copyleft || 0)} copyleft, ${formatNumber(filteredGithubRepoMissingLicenseCount)} missing, ${formatNumber(filteredGithubRepoLicensePolicyCounts.review || 0)} review)${licenseProjectSuffix}`,
+      `- OSV status: ${formatNumber(filteredGithubRepoCheckedCount)} checked in active view, ${formatNumber(filteredGithubRepoVulnerableCount)} vulnerable, ${formatNumber(filteredGithubRepoHighRiskCount)} high or critical${osvProjectSuffix}`,
+      `- Dependency chain: ${formatNumber(githubRepoFilteredResolvedRootCount)} of ${formatNumber(githubRepoFilteredRootCount)} active package roots resolved, ${formatNumber(githubRepoTransitiveNodeCount)} transitive nodes, ${formatNumber(githubRepoTransitiveSummary.failedRoots)} failed roots${chainProjectSuffix}`,
+      "",
+      "## License review queue",
+    ];
+    if (reviewRows.length === 0) {
+      lines.push("- No non-permissive or missing-license packages in the active view.");
+    } else {
+      reviewRows.forEach(({ pkg, policy }) => {
+        lines.push(
+          `- ${githubRepoPackageBriefLabel(pkg)} - ${githubPackageLicense(pkg) || "Missing SPDX"} (${policy.label})`,
+        );
+      });
+      const extraReview =
+        filteredGithubRepoPackages.filter(
+          (pkg) => githubPackageLicensePolicy(pkg).status !== "permissive",
+        ).length - reviewRows.length;
+      if (extraReview > 0) {
+        lines.push(`- ${formatNumber(extraReview)} additional review packages hidden.`);
+      }
+    }
+    lines.push("", "## OSV findings");
+    if (vulnerableRows.length === 0) {
+      lines.push("- No vulnerable packages in the active view.");
+    } else {
+      vulnerableRows.forEach(({ pkg, record }) => {
+        const ids = (record.advisoryIds || []).slice(0, 4).join(", ");
+        const scoreText = record.score ? ` score ${record.score}` : "";
+        lines.push(
+          `- ${githubRepoPackageBriefLabel(pkg)} - ${record.risk || "advisory"}${scoreText}, ${record.advisoryCount || 0} advisories${ids ? `: ${ids}` : ""}`,
+        );
+      });
+      const extraVulnerable =
+        filteredGithubRepoPackages.filter(
+          (pkg) => githubRepoPackageVulnRecord(pkg)?.status === "vulnerable",
+        ).length - vulnerableRows.length;
+      if (extraVulnerable > 0) {
+        lines.push(`- ${formatNumber(extraVulnerable)} additional vulnerable packages hidden.`);
+      }
+    }
+    lines.push("", "## Follow-up");
+    if (filteredGithubRepoLicenseReviewCount > 0) {
+      lines.push("- Review active-view non-permissive, custom, or missing SPDX license metadata.");
+    }
+    if (filteredGithubRepoHighRiskCount > 0) {
+      lines.push("- Prioritize active-view high and critical OSV findings before release.");
+    }
+    if (githubRepoFilteredResolvedRootCount < githubRepoFilteredRootCount) {
+      lines.push("- Build the active-view dependency chain before architecture handoff.");
+    }
+    if (
+      filteredGithubRepoLicenseReviewCount === 0 &&
+      filteredGithubRepoHighRiskCount === 0 &&
+      githubRepoFilteredResolvedRootCount >= githubRepoFilteredRootCount
+    ) {
+      lines.push("- No immediate active-view license or high-risk OSV follow-up identified.");
+    }
+    return `${lines.join("\n")}\n`;
+  };
+
+  const copyGithubRepoAuditBrief = async () => {
+    if (!githubRepoResult || filteredGithubRepoPackages.length === 0) return;
+    setGithubRepoBriefStatus("Copying...");
+    if (githubRepoBriefStatusTimerRef.current) {
+      clearTimeout(githubRepoBriefStatusTimerRef.current);
+    }
+    const copied = await copyTextToClipboard(buildGithubRepoAuditBrief());
+    setGithubRepoBriefStatus(copied ? "Brief copied" : "Copy failed");
+    githubRepoBriefStatusTimerRef.current = setTimeout(() => {
+      setGithubRepoBriefStatus("");
+      githubRepoBriefStatusTimerRef.current = null;
+    }, 1800);
+  };
 
   const exportGithubRepoSbom = () => {
     if (!githubRepoResult || filteredGithubRepoPackages.length === 0) return;
@@ -6759,7 +6956,10 @@ function App() {
       });
 
     const graphPackageLikeCount = packageNodes.length + transitiveNodes.length;
-    const shouldShowPackageLabels = graphPackageLikeCount <= 36;
+    const graphLabelCapacity = githubRepoGraphExpanded
+      ? 56
+      : Math.max(14, Math.floor((width * height) / 26000));
+    const shouldShowPackageLabels = graphPackageLikeCount <= graphLabelCapacity;
     const label = layer
       .append("g")
       .attr("class", "repo-graph-labels")
@@ -8528,6 +8728,27 @@ function App() {
                         e(
                           "div",
                           { className: "github-package-list-actions" },
+                          e(
+                            "button",
+                            {
+                              type: "button",
+                              className: "repo-graph-action-button",
+                              onClick: copyGithubRepoAuditBrief,
+                              disabled: filteredGithubRepoPackages.length === 0,
+                              title:
+                                "Copy a Markdown audit brief for the current repository package filter",
+                            },
+                            "Copy brief",
+                          ),
+                          githubRepoBriefStatus &&
+                            e(
+                              "span",
+                              {
+                                className: "github-repo-brief-status",
+                                role: "status",
+                              },
+                              githubRepoBriefStatus,
+                            ),
                           e(
                             "button",
                             {

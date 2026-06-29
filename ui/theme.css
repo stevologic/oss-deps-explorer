@@ -979,6 +979,21 @@ button.github-import-stat:focus-visible {
   white-space: nowrap;
 }
 
+.github-repo-brief-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 3px 7px;
+  border: 1px solid rgba(18, 128, 92, 0.28);
+  border-radius: 999px;
+  background: #ddf7eb;
+  color: #126b46;
+  font-size: 0.7rem;
+  font-weight: 800;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
 .github-repo-graph-status {
   display: flex;
   flex-wrap: wrap;
@@ -3444,6 +3459,16 @@ a:hover {
   }
 
   .github-import-stats {
+    justify-content: flex-start;
+  }
+
+  .github-package-list-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .github-package-list-header .github-package-list-actions {
+    width: 100%;
     justify-content: flex-start;
   }
 
