@@ -773,9 +773,30 @@ select:focus {
   font-size: 0.86rem;
 }
 
+.github-import-heading {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.github-import-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+}
+
 .github-import-summary strong {
   color: var(--primary-color);
   overflow-wrap: anywhere;
+}
+
+.github-repo-share-link {
+  min-height: 24px;
+  padding: 3px 7px;
+  font-size: 0.72rem;
 }
 
 .github-import-stats {

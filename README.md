@@ -314,9 +314,12 @@ repository package view can also export CycloneDX JSON with GitHub license
 metadata, license-policy properties, and OSV status properties for SBOM
 workflows. The repository graph toolbar exports the filtered graph as GraphViz
 DOT, including resolved transitive edges, license-policy attributes, and OSV
-status attributes for architecture and compliance review. A copyable Markdown
-audit brief summarizes active-view license review counts, OSV findings, and
-dependency-chain coverage for ticket or review handoff.
+status attributes for architecture and compliance review. A copyable and
+downloadable Markdown audit brief summarizes active-view license review counts,
+OSV findings, and dependency-chain coverage for ticket or review handoff.
+Repository import views can be reopened or shared with `?repo=owner/name`
+links, and successful imports canonicalize the URL to the GitHub repository
+slug for review handoff.
 
 Example:
 

@@ -96,6 +96,29 @@ const buildCveDeepLink = (id) => {
   return url.toString();
 };
 
+const parseGithubRepoDeepLink = (search = window.location.search) => {
+  const params = new URLSearchParams(search);
+  const repo =
+    params.get("repo") ||
+    params.get("repository") ||
+    params.get("github_repo") ||
+    "";
+  const trimmed = repo.trim();
+  return trimmed ? { repo: trimmed } : null;
+};
+
+const encodeGithubRepoParam = (repo) =>
+  encodeURIComponent(String(repo || "").trim()).replace(/%2F/gi, "/");
+
+const buildGithubRepoDeepLink = (repo) => {
+  const url = new URL(window.location.href);
+  url.search = "";
+  url.hash = "";
+  const encodedRepo = encodeGithubRepoParam(repo);
+  if (encodedRepo) url.search = `?repo=${encodedRepo}`;
+  return url.toString();
+};
+
 const ecosystemToManager = {
   npm: "npm",
   pypi: "pypi",
@@ -413,11 +436,17 @@ function App() {
       : window.location.origin;
   const initialDeepLink = React.useMemo(() => parsePackageDeepLink(), []);
   const initialCveDeepLink = React.useMemo(() => parseCveDeepLink(), []);
+  const initialRepoDeepLink = React.useMemo(() => parseGithubRepoDeepLink(), []);
   const initialDeepLinkRef = React.useRef(initialDeepLink);
   const initialCveDeepLinkRef = React.useRef(initialCveDeepLink);
+  const initialRepoDeepLinkRef = React.useRef(initialRepoDeepLink);
   const deepLinkLoadedRef = React.useRef(false);
   const [searchMode, setSearchMode] = React.useState(
-    initialCveDeepLink ? "cve" : "package",
+    initialCveDeepLink
+      ? "cve"
+      : initialRepoDeepLink
+        ? "repository"
+        : "package",
   );
   const [manager, setManager] = React.useState(
     initialDeepLink?.manager || "npm",
@@ -519,12 +548,17 @@ function App() {
   const [submittedManager, setSubmittedManager] = React.useState(manager);
   const [shareStatus, setShareStatus] = React.useState("");
   const shareStatusTimerRef = React.useRef(null);
+  const [githubRepoShareStatus, setGithubRepoShareStatus] =
+    React.useState("");
+  const githubRepoShareStatusTimerRef = React.useRef(null);
   const [githubRepoBriefStatus, setGithubRepoBriefStatus] = React.useState("");
   const githubRepoBriefStatusTimerRef = React.useRef(null);
   const [repos, setRepos] = React.useState({});
   const [repoMeta, setRepoMeta] = React.useState({});
   const [formSubmitted, setFormSubmitted] = React.useState(false);
-  const [githubRepoUrl, setGithubRepoUrl] = React.useState("");
+  const [githubRepoUrl, setGithubRepoUrl] = React.useState(
+    initialRepoDeepLink?.repo || "",
+  );
   const [githubRepoLoading, setGithubRepoLoading] = React.useState(false);
   const [githubRepoResult, setGithubRepoResult] = React.useState(null);
   const [githubRepoError, setGithubRepoError] = React.useState("");
@@ -1853,6 +1887,9 @@ function App() {
       if (shareStatusTimerRef.current) {
         clearTimeout(shareStatusTimerRef.current);
       }
+      if (githubRepoShareStatusTimerRef.current) {
+        clearTimeout(githubRepoShareStatusTimerRef.current);
+      }
       if (githubRepoBriefStatusTimerRef.current) {
         clearTimeout(githubRepoBriefStatusTimerRef.current);
       }
@@ -1884,6 +1921,14 @@ function App() {
     if (!normalized) return "";
     const url = buildCveDeepLink(normalized);
     window.history.replaceState({ cve: normalized }, "", url);
+    return url;
+  }, []);
+
+  const updateGithubRepoDeepLink = React.useCallback((repo) => {
+    const normalized = String(repo || "").trim();
+    if (!normalized) return "";
+    const url = buildGithubRepoDeepLink(normalized);
+    window.history.replaceState({ repository: normalized }, "", url);
     return url;
   }, []);
 
@@ -2592,6 +2637,26 @@ function App() {
     shareStatusTimerRef.current = setTimeout(() => setShareStatus(""), 1800);
   };
 
+  const currentGithubRepoDeepLink = () =>
+    buildGithubRepoDeepLink(githubRepoResult?.repository || githubRepoUrl);
+
+  const copyGithubRepoDeepLink = async (event) => {
+    event?.preventDefault?.();
+    const repo = githubRepoResult?.repository || githubRepoUrl;
+    if (!repo) return;
+    const url = currentGithubRepoDeepLink();
+    setGithubRepoShareStatus("Copying...");
+    if (githubRepoShareStatusTimerRef.current) {
+      clearTimeout(githubRepoShareStatusTimerRef.current);
+    }
+    const copied = await copyTextToClipboard(url);
+    setGithubRepoShareStatus(copied ? "Copied" : "Link ready");
+    githubRepoShareStatusTimerRef.current = setTimeout(
+      () => setGithubRepoShareStatus(""),
+      1800,
+    );
+  };
+
   const analyzeAffectedPackage = (affected, forcedVersion = "") => {
     const details = affectedPackageDetails(affected);
     if (!details) return;
@@ -3125,11 +3190,16 @@ function App() {
     }
   };
 
-  const importGithubRepoDependencies = async (evt) => {
+  const importGithubRepoDependencies = async (
+    evt,
+    forcedRepo = null,
+    options = {},
+  ) => {
     if (evt && evt.preventDefault) evt.preventDefault();
-    const repo = githubRepoUrl.trim();
+    const repo = String(forcedRepo !== null ? forcedRepo : githubRepoUrl).trim();
     if (!repo || githubRepoLoading) return;
     setSearchMode("repository");
+    setGithubRepoUrl(repo);
     setGithubRepoLoading(true);
     setGithubRepoError("");
     setGithubRepoResult(null);
@@ -3173,6 +3243,9 @@ function App() {
       setGithubRepoFilter("");
       setGithubRepoStatusFilter("all");
       setSelectedGithubRepoPackage(null);
+      if (options.updateUrl !== false) {
+        updateGithubRepoDeepLink(data.repository || repo);
+      }
       if (!data.packages || data.packages.length === 0) {
         setGithubRepoError(
           "No supported package dependencies were returned by GitHub's dependency graph.",
@@ -3219,6 +3292,14 @@ function App() {
       fetchCve(null, cveLink.id, { updateUrl: false });
       return;
     }
+    const repoLink = initialRepoDeepLinkRef.current;
+    if (repoLink && repoLink.repo) {
+      deepLinkLoadedRef.current = true;
+      setSearchMode("repository");
+      setGithubRepoUrl(repoLink.repo);
+      importGithubRepoDependencies(null, repoLink.repo, { updateUrl: false });
+      return;
+    }
     const link = initialDeepLinkRef.current;
     if (!link || !link.name) return;
     deepLinkLoadedRef.current = true;
@@ -3258,6 +3339,7 @@ function App() {
         Object.keys(packageChainDeps).length > 0 ||
         cacheStatus ||
         githubRepoUrl ||
+        githubRepoShareStatus ||
         githubRepoFilter ||
         githubRepoStatusFilter !== "all" ||
         githubRepoResult ||
@@ -3329,6 +3411,11 @@ function App() {
     setSubmittedNamespace("");
     setSubmittedManager(manager);
     setShareStatus("");
+    if (githubRepoShareStatusTimerRef.current) {
+      clearTimeout(githubRepoShareStatusTimerRef.current);
+      githubRepoShareStatusTimerRef.current = null;
+    }
+    setGithubRepoShareStatus("");
     setRepos({});
     setGithubRepoUrl("");
     setGithubRepoLoading(false);
@@ -5805,6 +5892,23 @@ function App() {
     }
     const copied = await copyTextToClipboard(buildGithubRepoAuditBrief());
     setGithubRepoBriefStatus(copied ? "Brief copied" : "Copy failed");
+    githubRepoBriefStatusTimerRef.current = setTimeout(() => {
+      setGithubRepoBriefStatus("");
+      githubRepoBriefStatusTimerRef.current = null;
+    }, 1800);
+  };
+
+  const exportGithubRepoAuditBrief = () => {
+    if (!githubRepoResult || filteredGithubRepoPackages.length === 0) return;
+    downloadText(
+      `${githubRepoExportBaseName()}-audit-brief.md`,
+      "text/markdown",
+      buildGithubRepoAuditBrief(),
+    );
+    if (githubRepoBriefStatusTimerRef.current) {
+      clearTimeout(githubRepoBriefStatusTimerRef.current);
+    }
+    setGithubRepoBriefStatus("Brief exported");
     githubRepoBriefStatusTimerRef.current = setTimeout(() => {
       setGithubRepoBriefStatus("");
       githubRepoBriefStatusTimerRef.current = null;
@@ -8570,9 +8674,23 @@ function App() {
                     { className: "github-import-summary" },
                     e(
                       "div",
-                      null,
-                      e("strong", null, githubRepoResult.repository),
-                      ` dependency graph`,
+                      { className: "github-import-heading" },
+                      e(
+                        "div",
+                        { className: "github-import-title-row" },
+                        e("strong", null, githubRepoResult.repository),
+                        e("span", null, "dependency graph"),
+                      ),
+                      e(
+                        "a",
+                        {
+                          className: "share-link-button github-repo-share-link",
+                          href: currentGithubRepoDeepLink(),
+                          onClick: copyGithubRepoDeepLink,
+                          title: "Copy or open a deep link to this repository import",
+                        },
+                        githubRepoShareStatus || "Copy repo link",
+                      ),
                     ),
                     e(
                       "div",
@@ -8739,6 +8857,18 @@ function App() {
                                 "Copy a Markdown audit brief for the current repository package filter",
                             },
                             "Copy brief",
+                          ),
+                          e(
+                            "button",
+                            {
+                              type: "button",
+                              className: "repo-graph-action-button",
+                              onClick: exportGithubRepoAuditBrief,
+                              disabled: filteredGithubRepoPackages.length === 0,
+                              title:
+                                "Export a Markdown audit brief for the current repository package filter",
+                            },
+                            "Export brief",
                           ),
                           githubRepoBriefStatus &&
                             e(
