@@ -19,7 +19,7 @@ Optional features include:
 * Vulnerability lookups from [OSV.dev](https://osv.dev) via the `-vuln` flag.
 * Repository health details from OpenSSF Scorecard with `-scorecard`.
 * Repository URLs cached alongside dependency data for faster Scorecard lookups.
-* GraphViz visual output when `-graph` is supplied or `graph=true` is passed for `/api/purl` requests.
+* GraphViz visual output when `-graph` is supplied or `graph=true` is passed for dependency lookup requests.
 
 Dependencies can also be fetched using a [package URL](https://github.com/package-url/purl-spec) via the `/api/purl/{purl}` endpoint.
 
@@ -247,8 +247,9 @@ GET /api/config
 GET /api/suggest/{manager}/{query}
 GET /api/versions?manager=<manager>&name=<name>[&namespace=<ns>]
 GET /api/repo/{repo}
+GET /api/github/dependencies?repo=<owner>/<repo>
 
-GET /api/lookup?manager=<manager>&name=<name>&version=<version>[&namespace=<ns>][&recursive=true][&vuln=true][&scorecard=true]
+GET /api/lookup?manager=<manager>&name=<name>&version=<version>[&namespace=<ns>][&recursive=true][&vuln=true][&scorecard=true][&graph=true]
 
 ```
 
@@ -259,11 +260,12 @@ curl http://localhost:8080/api/dependencies/npm/express/4.18.2
 curl http://localhost:8080/api/purl/pkg:npm/express@4.18.2
 ```
 
-Optional boolean query parameters `recursive`, `vuln`, and `scorecard` can override the
+Optional boolean query parameters `recursive`, `vuln`, `scorecard`, and `graph` can override the
 server flags per request:
 
 ```
 curl "http://localhost:8080/api/dependencies/npm/express/4.18.2?recursive=true&vuln=true&scorecard=true"
+curl "http://localhost:8080/api/dependencies/npm/express/4.18.2?graph=true"
 ```
 
 The response JSON has the simple shape:
@@ -289,6 +291,35 @@ flag is used, a `scorecards` object provides OpenSSF Scorecard results for any
 packages backed by a GitHub repository.
 
 The `/lookup` endpoint exposes the same functionality using query parameters instead of path segments.
+When `graph=true` is requested, the response is GraphViz DOT with content type
+`text/vnd.graphviz`. Recursive graph exports use the `parents` data to preserve
+direct and transitive edges instead of flattening every package under the root.
+DOT output declares package nodes with version attributes, so dependency-free
+packages and version inventory remain visible in graph tooling. Nodes include
+OSV status colors and an embedded legend when vulnerability context is exported.
+The UI security triage panel can also export the current analysis as JSON,
+CycloneDX SBOM, GraphViz DOT, or vulnerable-package CSV.
+
+The `/api/github/dependencies` endpoint imports GitHub dependency graph SBOM
+data for a repository and returns analyzable package URLs grouped by supported
+package manager. Each package includes cleaned license fields when GitHub's
+SPDX SBOM includes `licenseConcluded` or `licenseDeclared`, with `license`
+preferring the concluded value and falling back to the declared value. The UI
+repository import view exposes license summary filters, license chips on
+packages, missing-license isolation, and filtered CSV inventory exports with
+license, license-policy, and OSV triage columns for compliance handoff. License
+policy filters flag copyleft, missing, custom, and non-allowlisted SPDX
+expressions so legal review queues can be isolated quickly. The same filtered
+repository package view can also export CycloneDX JSON with GitHub license
+metadata, license-policy properties, and OSV status properties for SBOM
+workflows. The repository graph toolbar exports the filtered graph as GraphViz
+DOT, including resolved transitive edges, license-policy attributes, and OSV
+status attributes for architecture and compliance review. A copyable and
+downloadable Markdown audit brief summarizes active-view license review counts,
+OSV findings, and dependency-chain coverage for ticket or review handoff.
+Repository import views can be reopened or shared with `?repo=owner/name`
+links, and successful imports canonicalize the URL to the GitHub repository
+slug for review handoff.
 
 Example:
 

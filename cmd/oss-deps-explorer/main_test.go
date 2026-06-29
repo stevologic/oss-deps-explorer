@@ -170,6 +170,31 @@ func TestGitHubDependencyPackageFromPURL(t *testing.T) {
 	}
 }
 
+func TestGitHubDependencyLicense(t *testing.T) {
+	cases := []struct {
+		concluded string
+		declared  string
+		license   string
+	}{
+		{" MIT ", "Apache-2.0", "MIT"},
+		{"NOASSERTION", "BSD-3-Clause", "BSD-3-Clause"},
+		{"NONE", "NOASSERTION", ""},
+		{"", "ISC", "ISC"},
+	}
+	for _, c := range cases {
+		license, concluded, declared := githubDependencyLicense(c.concluded, c.declared)
+		if license != c.license {
+			t.Fatalf("githubDependencyLicense(%q,%q) license=%q want %q", c.concluded, c.declared, license, c.license)
+		}
+		if concluded != cleanSPDXValue(c.concluded) {
+			t.Fatalf("concluded=%q want cleaned %q", concluded, cleanSPDXValue(c.concluded))
+		}
+		if declared != cleanSPDXValue(c.declared) {
+			t.Fatalf("declared=%q want cleaned %q", declared, cleanSPDXValue(c.declared))
+		}
+	}
+}
+
 func TestQueryBool(t *testing.T) {
 	req := &http.Request{URL: &url.URL{}}
 	if queryBool(req, "x", true) != true {
@@ -202,10 +227,122 @@ func TestFormatPackage(t *testing.T) {
 
 func TestDepsToDot(t *testing.T) {
 	deps := map[string]interface{}{"b": "1", "c": "2"}
-	got := depsToDot("a", deps)
-	expect := "digraph deps {\n    \"a\" -> \"b\"\n    \"a\" -> \"c\"\n}\n"
+	got := depsToDot("a", "0", deps, nil, nil, nil, nil)
+	expect := "digraph deps {\n" +
+		"    node [shape=box]\n" +
+		"    \"a\" [label=\"a\" style=\"filled\" fillcolor=\"#ffffff\" version=\"0\"]\n" +
+		"    \"b\" [label=\"b\\n1\" style=\"filled\" fillcolor=\"#ffffff\" version=\"1\"]\n" +
+		"    \"c\" [label=\"c\\n2\" style=\"filled\" fillcolor=\"#ffffff\" version=\"2\"]\n" +
+		"    \"a\" -> \"b\"\n" +
+		"    \"a\" -> \"c\"\n" +
+		"    subgraph cluster_legend {\n" +
+		"        label=\"OSV status\"\n" +
+		"        color=\"#cbd5e1\"\n" +
+		"        style=\"rounded\"\n" +
+		"        \"__legend_vulnerable\" [label=\"vulnerable\" style=\"filled\" fillcolor=\"#fecaca\"]\n" +
+		"        \"__legend_no_advisory\" [label=\"no advisory\" style=\"filled\" fillcolor=\"#bbf7d0\"]\n" +
+		"        \"__legend_unknown\" [label=\"unknown\" style=\"filled\" fillcolor=\"#fde68a\"]\n" +
+		"        \"__legend_not_checked\" [label=\"not checked\" style=\"filled\" fillcolor=\"#e5e7eb\"]\n" +
+		"    }\n" +
+		"}\n"
 	if got != expect {
 		t.Errorf("depsToDot output mismatch\n got:%s\n want:%s", got, expect)
+	}
+}
+
+func TestDepsToDotIncludesRootWhenEmpty(t *testing.T) {
+	got := depsToDot("root", "1.0.0", map[string]interface{}{}, nil, map[string]string{"root": "https://github.com/acme/root"}, nil, nil)
+	expect := "digraph deps {\n" +
+		"    node [shape=box]\n" +
+		"    \"root\" [label=\"root\" style=\"filled\" fillcolor=\"#ffffff\" version=\"1.0.0\" repository=\"https://github.com/acme/root\" URL=\"https://github.com/acme/root\"]\n" +
+		"    subgraph cluster_legend {\n" +
+		"        label=\"OSV status\"\n" +
+		"        color=\"#cbd5e1\"\n" +
+		"        style=\"rounded\"\n" +
+		"        \"__legend_vulnerable\" [label=\"vulnerable\" style=\"filled\" fillcolor=\"#fecaca\"]\n" +
+		"        \"__legend_no_advisory\" [label=\"no advisory\" style=\"filled\" fillcolor=\"#bbf7d0\"]\n" +
+		"        \"__legend_unknown\" [label=\"unknown\" style=\"filled\" fillcolor=\"#fde68a\"]\n" +
+		"        \"__legend_not_checked\" [label=\"not checked\" style=\"filled\" fillcolor=\"#e5e7eb\"]\n" +
+		"    }\n" +
+		"}\n"
+	if got != expect {
+		t.Errorf("depsToDot empty output mismatch\n got:%s\n want:%s", got, expect)
+	}
+}
+
+func TestDepsToDotUsesParents(t *testing.T) {
+	deps := map[string]interface{}{
+		"direct":         "1",
+		"shared":         "2",
+		"transitive":     "3",
+		`quoted"package`: "4",
+	}
+	parents := map[string][]string{
+		"direct":         {""},
+		"shared":         {"direct", "transitive"},
+		"transitive":     {"direct"},
+		`quoted"package`: {`parent\package`},
+	}
+	repos := map[string]string{
+		"direct":         "https://github.com/acme/direct",
+		`quoted"package`: `https://github.com/acme/quoted"package`,
+	}
+	got := depsToDot("root", "0", deps, parents, repos, nil, nil)
+	expect := "digraph deps {\n" +
+		"    node [shape=box]\n" +
+		"    \"root\" [label=\"root\" style=\"filled\" fillcolor=\"#ffffff\" version=\"0\"]\n" +
+		"    \"direct\" [label=\"direct\\n1\" style=\"filled\" fillcolor=\"#ffffff\" version=\"1\" repository=\"https://github.com/acme/direct\" URL=\"https://github.com/acme/direct\"]\n" +
+		"    \"quoted\\\"package\" [label=\"quoted\\\"package\\n4\" style=\"filled\" fillcolor=\"#ffffff\" version=\"4\" repository=\"https://github.com/acme/quoted\\\"package\" URL=\"https://github.com/acme/quoted\\\"package\"]\n" +
+		"    \"shared\" [label=\"shared\\n2\" style=\"filled\" fillcolor=\"#ffffff\" version=\"2\"]\n" +
+		"    \"transitive\" [label=\"transitive\\n3\" style=\"filled\" fillcolor=\"#ffffff\" version=\"3\"]\n" +
+		"    \"direct\" -> \"shared\"\n" +
+		"    \"direct\" -> \"transitive\"\n" +
+		"    \"parent\\\\package\" -> \"quoted\\\"package\"\n" +
+		"    \"root\" -> \"direct\"\n" +
+		"    \"transitive\" -> \"shared\"\n" +
+		"    subgraph cluster_legend {\n" +
+		"        label=\"OSV status\"\n" +
+		"        color=\"#cbd5e1\"\n" +
+		"        style=\"rounded\"\n" +
+		"        \"__legend_vulnerable\" [label=\"vulnerable\" style=\"filled\" fillcolor=\"#fecaca\"]\n" +
+		"        \"__legend_no_advisory\" [label=\"no advisory\" style=\"filled\" fillcolor=\"#bbf7d0\"]\n" +
+		"        \"__legend_unknown\" [label=\"unknown\" style=\"filled\" fillcolor=\"#fde68a\"]\n" +
+		"        \"__legend_not_checked\" [label=\"not checked\" style=\"filled\" fillcolor=\"#e5e7eb\"]\n" +
+		"    }\n" +
+		"}\n"
+	if got != expect {
+		t.Errorf("depsToDot parent output mismatch\n got:%s\n want:%s", got, expect)
+	}
+}
+
+func TestDepsToDotIncludesSecurityAttributes(t *testing.T) {
+	deps := map[string]interface{}{"dep": "1.2.3"}
+	statuses := map[string]vulnerabilityStatus{
+		"root": {Status: "no_advisory", Checked: true},
+		"dep":  {Status: "vulnerable", Checked: true, AdvisoryCount: 2, Error: "partial OSV result"},
+	}
+	scorecards := map[string]interface{}{
+		"root": map[string]interface{}{"score": 8.5},
+		"dep":  map[string]interface{}{"scorecard": map[string]interface{}{"score": 4}},
+	}
+	got := depsToDot("root", "1.0.0", deps, nil, nil, statuses, scorecards)
+	expect := "digraph deps {\n" +
+		"    node [shape=box]\n" +
+		"    \"root\" [label=\"root\" style=\"filled\" fillcolor=\"#bbf7d0\" version=\"1.0.0\" osv_status=\"no_advisory\" osv_checked=\"true\" advisory_count=\"0\" scorecard_score=\"8.5\"]\n" +
+		"    \"dep\" [label=\"dep\\n1.2.3\" style=\"filled\" fillcolor=\"#fecaca\" version=\"1.2.3\" osv_status=\"vulnerable\" osv_checked=\"true\" advisory_count=\"2\" osv_error=\"partial OSV result\" scorecard_score=\"4\"]\n" +
+		"    \"root\" -> \"dep\"\n" +
+		"    subgraph cluster_legend {\n" +
+		"        label=\"OSV status\"\n" +
+		"        color=\"#cbd5e1\"\n" +
+		"        style=\"rounded\"\n" +
+		"        \"__legend_vulnerable\" [label=\"vulnerable\" style=\"filled\" fillcolor=\"#fecaca\"]\n" +
+		"        \"__legend_no_advisory\" [label=\"no advisory\" style=\"filled\" fillcolor=\"#bbf7d0\"]\n" +
+		"        \"__legend_unknown\" [label=\"unknown\" style=\"filled\" fillcolor=\"#fde68a\"]\n" +
+		"        \"__legend_not_checked\" [label=\"not checked\" style=\"filled\" fillcolor=\"#e5e7eb\"]\n" +
+		"    }\n" +
+		"}\n"
+	if got != expect {
+		t.Errorf("depsToDot security attributes mismatch\n got:%s\n want:%s", got, expect)
 	}
 }
 
@@ -302,6 +439,10 @@ func TestCacheKey(t *testing.T) {
 	k2 := cacheKey("npm", "", "pkg", "1.0.0", true, false, false)
 	if k1 == k2 {
 		t.Errorf("cache key should differ for recursive queries")
+	}
+	k3 := graphCacheKey(k1)
+	if k1 == k3 {
+		t.Errorf("graph cache key should differ from JSON dependency query")
 	}
 	p1 := purlCacheKey("pkg:npm/pkg@1.0.0", false, false, false, false)
 	p2 := purlCacheKey("pkg:npm/pkg@1.0.0", true, false, false, false)
