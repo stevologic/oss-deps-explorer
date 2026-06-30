@@ -321,8 +321,8 @@ Repository import views can be reopened or shared with `?repo=owner/name`
 links, and successful imports canonicalize the URL to the GitHub repository
 slug for review handoff. GitHub SBOM records with unsupported package URLs or
 ecosystems are retained as skipped dependencies with license and external
-reference metadata, so reviewers can filter, brief, and export them instead of
-only seeing an unsupported count.
+reference metadata, so reviewers can filter, brief, and export them as CSV or
+JSON instead of only seeing an unsupported count.
 
 Example:
 

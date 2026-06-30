@@ -5815,6 +5815,34 @@ function App() {
     return query ? `${label} matching "${query}"` : label;
   };
 
+  const buildGithubRepoSkippedDependencyQueue = () => {
+    const skippedDependencies = filteredGithubRepoUnsupportedPackages.map((pkg) => ({
+      display: githubUnsupportedPackageLabel(pkg),
+      name: pkg.name || "",
+      version: pkg.version || "",
+      purl: pkg.purl || "",
+      spdx_id: pkg.spdx_id || "",
+      license: githubPackageLicense(pkg) || "",
+      license_concluded: pkg.license_concluded || "",
+      license_declared: pkg.license_declared || "",
+      external_refs: pkg.external_refs || [],
+      skipped_reason: "unsupported package URL or ecosystem",
+    }));
+    return {
+      schema: "oss-deps-explorer/skipped-dependency-queue/v1",
+      repository: githubRepoResult?.repository || "",
+      source: githubRepoResult?.source || "github_dependency_graph_sbom",
+      generated_at: new Date().toISOString(),
+      active_filter: {
+        label: githubRepoActiveFilterLabel(),
+        query: githubRepoFilter.trim(),
+      },
+      total_skipped_count: githubRepoUnsupportedPackages.length,
+      filtered_skipped_count: skippedDependencies.length,
+      skipped_dependencies: skippedDependencies,
+    };
+  };
+
   const githubRepoPackageBriefLabel = (pkg) => {
     const versionValue = pkg.version ? `@${pkg.version}` : "";
     const managerLabel = pmDisplayNames[pkg.manager] || pkg.manager || "package";
@@ -5996,6 +6024,17 @@ function App() {
       `${githubRepoExportBaseName()}-cyclonedx.json`,
       "application/vnd.cyclonedx+json",
       JSON.stringify(buildGithubRepoCycloneDxBom(), null, 2),
+    );
+  };
+
+  const exportGithubRepoSkippedJson = () => {
+    if (!githubRepoResult || filteredGithubRepoUnsupportedPackages.length === 0) {
+      return;
+    }
+    downloadText(
+      `${githubRepoExportBaseName()}-skipped-dependencies.json`,
+      "application/json",
+      JSON.stringify(buildGithubRepoSkippedDependencyQueue(), null, 2),
     );
   };
 
@@ -9069,12 +9108,21 @@ function App() {
                             {
                               type: "button",
                               className: "repo-graph-action-button",
-                              onClick: exportGithubRepoSbom,
-                              disabled: filteredGithubRepoPackages.length === 0,
+                              onClick: githubRepoShowingSkipped
+                                ? exportGithubRepoSkippedJson
+                                : exportGithubRepoSbom,
+                              disabled: githubRepoShowingSkipped
+                                ? filteredGithubRepoUnsupportedPackages.length === 0
+                                : filteredGithubRepoPackages.length === 0,
+                              "aria-label": githubRepoShowingSkipped
+                                ? "Export skipped dependency JSON"
+                                : "Export CycloneDX SBOM",
                               title:
-                                "Export the current imported package filter as CycloneDX JSON with license and OSV status properties",
+                                githubRepoShowingSkipped
+                                  ? "Export skipped GitHub SBOM records as JSON with license and external references"
+                                  : "Export the current imported package filter as CycloneDX JSON with license and OSV status properties",
                             },
-                            "Export SBOM",
+                            githubRepoShowingSkipped ? "Export JSON" : "Export SBOM",
                           ),
                           e(
                             "span",

@@ -1812,6 +1812,19 @@ func main() {
 
 	cache := newRedisCache(cfg)
 
+	handler := buildRouter(cfg, cache, recurse, withVuln, withScorecard, withGraph)
+	addr := ":" + cfg.Server.Port
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: withCORS(handler),
+	}
+	log.Printf("starting server on %s", addr)
+	if err := srv.ListenAndServe(); err != nil {
+		log.Fatalf("server error: %v", err)
+	}
+}
+
+func buildRouter(cfg *config.Config, cache *redisCache, recurse, withVuln, withScorecard, withGraph bool) http.Handler {
 	r := mux.NewRouter()
 	r.UseEncodedPath()
 	r.Use(logRequests)
@@ -2421,13 +2434,5 @@ func main() {
 	// serve static UI
 	r.PathPrefix("/").Handler(http.FileServer(http.Dir("./ui")))
 
-	addr := ":" + cfg.Server.Port
-	srv := &http.Server{
-		Addr:    addr,
-		Handler: withCORS(r),
-	}
-	log.Printf("starting server on %s", addr)
-	if err := srv.ListenAndServe(); err != nil {
-		log.Fatalf("server error: %v", err)
-	}
+	return r
 }

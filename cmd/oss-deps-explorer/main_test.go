@@ -4,10 +4,14 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/example/oss-deps-explorer/internal/config"
+	"github.com/example/oss-deps-explorer/internal/manager"
 )
 
 type fakeManager struct {
@@ -41,6 +45,65 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func newGraphTestRouter(t *testing.T, withGraph bool) http.Handler {
+	t.Helper()
+	oldRegistry := Registry
+	Registry = map[string]manager.Manager{
+		"npm": &fakeManager{
+			deps: map[string]map[string]interface{}{
+				":root:1.0.0": {"dep": "2.0.0"},
+			},
+		},
+	}
+	t.Cleanup(func() {
+		Registry = oldRegistry
+	})
+	return buildRouter(&config.Config{}, nil, false, false, false, withGraph)
+}
+
+func TestLookupGraphResponseHeaders(t *testing.T) {
+	handler := newGraphTestRouter(t, false)
+	req := httptest.NewRequest(http.MethodGet, "/api/lookup?manager=npm&name=root&version=1.0.0&graph=true", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/vnd.graphviz" {
+		t.Fatalf("content type=%q, want text/vnd.graphviz", got)
+	}
+	if got := rec.Header().Get("X-Cache-Status"); got != "MISS" {
+		t.Fatalf("cache status=%q, want MISS", got)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "digraph deps") || !strings.Contains(body, `"root" -> "dep"`) {
+		t.Fatalf("response body is not the expected DOT graph:\n%s", body)
+	}
+}
+
+func TestDependenciesRouteUsesDefaultGraphMode(t *testing.T) {
+	handler := newGraphTestRouter(t, true)
+	req := httptest.NewRequest(http.MethodGet, "/api/dependencies/npm/root/1.0.0", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/vnd.graphviz" {
+		t.Fatalf("content type=%q, want text/vnd.graphviz", got)
+	}
+	if got := rec.Header().Get("X-Cache-Status"); got != "MISS" {
+		t.Fatalf("cache status=%q, want MISS", got)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `"root" -> "dep"`) {
+		t.Fatalf("response body is not the expected dependency graph:\n%s", body)
+	}
 }
 
 func TestValidateName(t *testing.T) {
