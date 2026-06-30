@@ -2059,6 +2059,33 @@ function App() {
       .toLowerCase();
   };
 
+  const githubUnsupportedPackageLabel = (pkg) =>
+    pkg?.display ||
+    pkg?.name ||
+    pkg?.purl ||
+    pkg?.spdx_id ||
+    "Unsupported dependency";
+
+  const githubUnsupportedPackageSearchText = (pkg) => {
+    const policy = githubPackageLicensePolicy(pkg);
+    return [
+      githubUnsupportedPackageLabel(pkg),
+      pkg?.version,
+      githubPackageLicense(pkg),
+      policy.label,
+      policy.status,
+      policy.detail,
+      pkg?.license_concluded,
+      pkg?.license_declared,
+      pkg?.purl,
+      pkg?.spdx_id,
+      ...(pkg?.external_refs || []),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+  };
+
   const applyPackageSuggestion = (pkg) => {
     if (Date.now() < packageSuggestionSuppressUntilRef.current) return;
     const parsed = parsePackageInput(
@@ -5173,7 +5200,10 @@ function App() {
   const showPackageSuggestions =
     visiblePackageSuggestions.length > 0 && !showPackageTypeahead;
   const githubRepoPackages = githubRepoResult?.packages || [];
+  const githubRepoUnsupportedPackages =
+    githubRepoResult?.unsupported_packages || [];
   const githubRepoQuery = githubRepoFilter.trim().toLowerCase();
+  const githubRepoShowingSkipped = githubRepoStatusFilter === "skipped";
   const githubRepoFilterMatchesPackage = (pkg) => {
     if (githubRepoStatusFilter === "all") return true;
     if (githubRepoStatusFilter === "skipped") return false;
@@ -5229,7 +5259,19 @@ function App() {
         githubPackageSearchText(pkg).includes(githubRepoQuery),
       )
     : githubRepoStatusFilteredPackages;
+  const filteredGithubRepoUnsupportedPackages = githubRepoShowingSkipped
+    ? githubRepoQuery
+      ? githubRepoUnsupportedPackages.filter((pkg) =>
+          githubUnsupportedPackageSearchText(pkg).includes(githubRepoQuery),
+        )
+      : githubRepoUnsupportedPackages
+    : [];
   const visibleGithubRepoPackages = filteredGithubRepoPackages.slice(0, 80);
+  const visibleGithubRepoUnsupportedPackages =
+    filteredGithubRepoUnsupportedPackages.slice(0, 80);
+  const githubRepoActiveInventoryCount = githubRepoShowingSkipped
+    ? filteredGithubRepoUnsupportedPackages.length
+    : filteredGithubRepoPackages.length;
   const githubRepoPackagePanelShowsTree =
     githubRepoTransitiveLoading || Object.keys(githubRepoTransitiveDeps).length > 0;
   const githubRepoGraphPackageNodeId = (pkg, index) => {
@@ -5780,6 +5822,39 @@ function App() {
   };
 
   const buildGithubRepoAuditBrief = () => {
+    if (githubRepoShowingSkipped) {
+      const rows = filteredGithubRepoUnsupportedPackages.slice(0, 15);
+      const extra = filteredGithubRepoUnsupportedPackages.length - rows.length;
+      const lines = [
+        `# OSS dependency skipped-item brief: ${githubRepoResult?.repository || "repository"}`,
+        "",
+        "- Source: GitHub dependency graph SBOM",
+        `- Active view: skipped dependencies matching ${githubRepoFilter.trim() ? `"${githubRepoFilter.trim()}"` : "all skipped items"}`,
+        `- Skipped dependencies: ${formatNumber(filteredGithubRepoUnsupportedPackages.length)} of ${formatNumber(githubRepoUnsupportedPackages.length)}`,
+        "",
+        "## Skipped dependency queue",
+      ];
+      if (rows.length === 0) {
+        lines.push("- No skipped dependencies match the active filter.");
+      } else {
+        rows.forEach((pkg) => {
+          const license = githubPackageLicense(pkg) || "Missing SPDX";
+          const refs = (pkg.external_refs || []).slice(0, 2).join(", ");
+          lines.push(
+            `- ${githubUnsupportedPackageLabel(pkg)}${pkg.version ? `@${pkg.version}` : ""} - ${license}${refs ? `; refs: ${refs}` : ""}`,
+          );
+        });
+        if (extra > 0) {
+          lines.push(`- ${formatNumber(extra)} additional skipped dependencies hidden.`);
+        }
+      }
+      lines.push(
+        "",
+        "## Follow-up",
+        "- Review skipped package URLs or ecosystems before treating the imported graph as complete.",
+      );
+      return `${lines.join("\n")}\n`;
+    }
     const reviewRows = filteredGithubRepoPackages
       .map((pkg) => ({
         pkg,
@@ -5885,7 +5960,7 @@ function App() {
   };
 
   const copyGithubRepoAuditBrief = async () => {
-    if (!githubRepoResult || filteredGithubRepoPackages.length === 0) return;
+    if (!githubRepoResult || githubRepoActiveInventoryCount === 0) return;
     setGithubRepoBriefStatus("Copying...");
     if (githubRepoBriefStatusTimerRef.current) {
       clearTimeout(githubRepoBriefStatusTimerRef.current);
@@ -5899,7 +5974,7 @@ function App() {
   };
 
   const exportGithubRepoAuditBrief = () => {
-    if (!githubRepoResult || filteredGithubRepoPackages.length === 0) return;
+    if (!githubRepoResult || githubRepoActiveInventoryCount === 0) return;
     downloadText(
       `${githubRepoExportBaseName()}-audit-brief.md`,
       "text/markdown",
@@ -5925,7 +6000,43 @@ function App() {
   };
 
   const exportGithubRepoInventory = () => {
-    if (!githubRepoResult || filteredGithubRepoPackages.length === 0) return;
+    if (!githubRepoResult) return;
+    if (githubRepoShowingSkipped) {
+      if (filteredGithubRepoUnsupportedPackages.length === 0) return;
+      const rows = [
+        [
+          "repository",
+          "name",
+          "version",
+          "purl",
+          "license",
+          "license_concluded",
+          "license_declared",
+          "spdx_id",
+          "external_refs",
+          "skipped_reason",
+        ],
+        ...filteredGithubRepoUnsupportedPackages.map((pkg) => [
+          githubRepoResult.repository || "",
+          pkg.name || githubUnsupportedPackageLabel(pkg),
+          pkg.version || "",
+          pkg.purl || "",
+          githubPackageLicense(pkg),
+          pkg.license_concluded || "",
+          pkg.license_declared || "",
+          pkg.spdx_id || "",
+          (pkg.external_refs || []).join(";"),
+          "unsupported package URL or ecosystem",
+        ]),
+      ];
+      downloadText(
+        `${githubRepoExportBaseName()}-skipped-dependencies.csv`,
+        "text/csv",
+        rows.map((row) => row.map(csvValue).join(",")).join("\n"),
+      );
+      return;
+    }
+    if (filteredGithubRepoPackages.length === 0) return;
     const rows = [
       [
         "repository",
@@ -6178,11 +6289,65 @@ function App() {
       { className: "github-import-stat is-static" },
       label,
     );
+  const renderGithubRepoSkippedPackage = (pkg, index) => {
+    const label = githubUnsupportedPackageLabel(pkg);
+    const license = githubPackageLicense(pkg);
+    const policy = githubPackageLicensePolicy(pkg);
+    const refs = pkg.external_refs || [];
+    return e(
+      "article",
+      {
+        key: pkg.spdx_id || pkg.purl || `${label}-${pkg.version || ""}-${index}`,
+        className: "github-skipped-package-card",
+        title: refs.length > 0 ? refs.join("\n") : label,
+      },
+      e(
+        "span",
+        { className: "github-package-main" },
+        e("span", { className: "github-package-name" }, label),
+        e(
+          "span",
+          { className: "github-package-version" },
+          pkg.version ? `@${pkg.version}` : "version unavailable",
+        ),
+        e(
+          "span",
+          { className: "github-skipped-reason" },
+          "Unsupported ecosystem",
+        ),
+        license &&
+          e(
+            "span",
+            {
+              className: "github-package-license-badge",
+              title: githubPackageLicenseTitle(pkg),
+            },
+            license,
+          ),
+        policy.status !== "permissive" &&
+          e(
+            "span",
+            {
+              className: `github-package-policy-badge ${policy.status}`,
+              title: policy.detail,
+            },
+            policy.shortLabel,
+          ),
+      ),
+      e(
+        "span",
+        { className: "github-skipped-ref" },
+        pkg.purl || refs[0] || pkg.spdx_id || "No package URL",
+      ),
+    );
+  };
   const githubRepoFilterEmptyMessage =
     githubRepoStatusFilter === "skipped"
-      ? `${githubRepoResult?.unsupported_count || 0} skipped dependenc${
-          githubRepoResult?.unsupported_count === 1 ? "y was" : "ies were"
-        } counted by GitHub but are not included in the supported package graph.`
+      ? githubRepoUnsupportedPackages.length > 0
+        ? "No skipped dependencies match the active filter."
+        : `${githubRepoResult?.unsupported_count || 0} skipped dependenc${
+            githubRepoResult?.unsupported_count === 1 ? "y was" : "ies were"
+          } counted by GitHub but are not included in the supported package graph.`
       : githubRepoStatusFilter !== "all" || githubRepoQuery
         ? "No imported dependencies match the active filters."
         : "No supported dependencies were returned.";
@@ -8836,11 +9001,17 @@ function App() {
                         e(
                           "div",
                           null,
-                          e("strong", null, "Packages"),
+                          e(
+                            "strong",
+                            null,
+                            githubRepoShowingSkipped
+                              ? "Skipped dependencies"
+                              : "Packages",
+                          ),
                           e(
                             "span",
                             null,
-                            `${filteredGithubRepoPackages.length} shown`,
+                            `${githubRepoActiveInventoryCount} shown`,
                           ),
                         ),
                         e(
@@ -8852,7 +9023,7 @@ function App() {
                               type: "button",
                               className: "repo-graph-action-button",
                               onClick: copyGithubRepoAuditBrief,
-                              disabled: filteredGithubRepoPackages.length === 0,
+                              disabled: githubRepoActiveInventoryCount === 0,
                               title:
                                 "Copy a Markdown audit brief for the current repository package filter",
                             },
@@ -8864,7 +9035,7 @@ function App() {
                               type: "button",
                               className: "repo-graph-action-button",
                               onClick: exportGithubRepoAuditBrief,
-                              disabled: filteredGithubRepoPackages.length === 0,
+                              disabled: githubRepoActiveInventoryCount === 0,
                               title:
                                 "Export a Markdown audit brief for the current repository package filter",
                             },
@@ -8885,9 +9056,11 @@ function App() {
                               type: "button",
                               className: "repo-graph-action-button",
                               onClick: exportGithubRepoInventory,
-                              disabled: filteredGithubRepoPackages.length === 0,
+                              disabled: githubRepoActiveInventoryCount === 0,
                               title:
-                                "Export the current imported package filter as CSV with license and OSV columns",
+                                githubRepoShowingSkipped
+                                  ? "Export skipped GitHub SBOM records as CSV"
+                                  : "Export the current imported package filter as CSV with license and OSV columns",
                             },
                             "Export CSV",
                           ),
@@ -8906,13 +9079,17 @@ function App() {
                           e(
                             "span",
                             { className: "github-package-list-count" },
-                            `${githubRepoPackages.length} total`,
+                            githubRepoShowingSkipped
+                              ? `${githubRepoUnsupportedPackages.length} skipped total`
+                              : `${githubRepoPackages.length} total`,
                           ),
                         ),
                       ),
                       e("input", {
                         className: "github-package-filter",
-                        placeholder: "Filter imported dependencies",
+                        placeholder: githubRepoShowingSkipped
+                          ? "Filter skipped dependencies"
+                          : "Filter imported dependencies",
                         value: githubRepoFilter,
                         onChange: (event) => setGithubRepoFilter(event.target.value),
                       }),
@@ -8920,12 +9097,18 @@ function App() {
                         "div",
                         {
                           className: `github-package-list${
-                            githubRepoPackagePanelShowsTree ? " tree" : ""
+                            githubRepoPackagePanelShowsTree && !githubRepoShowingSkipped
+                              ? " tree"
+                              : ""
                           }`,
                         },
-                        githubRepoPackagePanelShowsTree
-                          ? filteredGithubRepoPackages.map(renderGithubRepoTreeRoot)
-                          : visibleGithubRepoPackages.map((pkg, index) => {
+                        githubRepoShowingSkipped
+                          ? visibleGithubRepoUnsupportedPackages.map(
+                              renderGithubRepoSkippedPackage,
+                            )
+                          : githubRepoPackagePanelShowsTree
+                            ? filteredGithubRepoPackages.map(renderGithubRepoTreeRoot)
+                            : visibleGithubRepoPackages.map((pkg, index) => {
                               const packageKey = githubRepoPackageKey(pkg);
                               const packageIdentityKey =
                                 githubRepoPackageIdentityKey(pkg);
@@ -9001,14 +9184,24 @@ function App() {
                               );
                             }),
                       ),
-                      !githubRepoPackagePanelShowsTree &&
-                        filteredGithubRepoPackages.length > visibleGithubRepoPackages.length &&
+                      githubRepoShowingSkipped &&
+                        filteredGithubRepoUnsupportedPackages.length >
+                          visibleGithubRepoUnsupportedPackages.length &&
+                        e(
+                          "div",
+                          { className: "github-import-more" },
+                          `Showing ${visibleGithubRepoUnsupportedPackages.length} of ${filteredGithubRepoUnsupportedPackages.length}. Narrow the filter to see more.`,
+                        ),
+                      !githubRepoShowingSkipped &&
+                        !githubRepoPackagePanelShowsTree &&
+                        filteredGithubRepoPackages.length >
+                          visibleGithubRepoPackages.length &&
                         e(
                           "div",
                           { className: "github-import-more" },
                           `Showing ${visibleGithubRepoPackages.length} of ${filteredGithubRepoPackages.length}. Narrow the filter to see more.`,
                         ),
-                      filteredGithubRepoPackages.length === 0 &&
+                      githubRepoActiveInventoryCount === 0 &&
                         e(
                           "div",
                           { className: "github-import-empty" },

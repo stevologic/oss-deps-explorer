@@ -1549,6 +1549,48 @@ button.github-import-stat:focus-visible {
   box-shadow: 0 6px 16px rgba(0, 229, 255, 0.1);
 }
 
+.github-skipped-package-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 5px;
+  min-width: 0;
+  min-height: 62px;
+  padding: 7px 8px;
+  border: 1px dashed rgba(181, 107, 0, 0.42);
+  border-radius: 6px;
+  background: rgba(255, 244, 214, 0.74);
+  color: var(--text-color);
+}
+
+.github-skipped-package-card .github-package-main {
+  flex-wrap: wrap;
+}
+
+.github-skipped-reason {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  min-height: 19px;
+  padding: 2px 5px;
+  border: 1px solid rgba(181, 107, 0, 0.34);
+  border-radius: 4px;
+  background: #fff8d7;
+  color: #6b5310;
+  font-size: 0.66rem;
+  font-weight: 800;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.github-skipped-ref {
+  min-width: 0;
+  color: var(--neutral-dark-color);
+  font-family: Consolas, "SFMono-Regular", monospace;
+  font-size: 0.7rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
 .github-package-main {
   display: flex;
   align-items: center;
@@ -5433,6 +5475,7 @@ html[data-theme="dark"] .github-repo-graph-panel,
 html[data-theme="dark"] .github-package-detail,
 html[data-theme="dark"] .github-package-detail-empty,
 html[data-theme="dark"] .github-package-card,
+html[data-theme="dark"] .github-skipped-package-card,
 html[data-theme="dark"] .dependency-box,
 html[data-theme="dark"] .scorecard-box,
 html[data-theme="dark"] .repo-columns,
@@ -5564,6 +5607,21 @@ html[data-theme="dark"] .github-import-stat.github-import-policy-stat.high {
   border-color: rgba(248, 113, 113, 0.36);
   background: rgba(127, 29, 29, 0.4);
   color: #fca5a5;
+}
+
+html[data-theme="dark"] .github-skipped-package-card {
+  border-color: rgba(251, 191, 36, 0.38);
+  background: rgba(120, 53, 15, 0.18);
+}
+
+html[data-theme="dark"] .github-skipped-reason {
+  border-color: rgba(251, 191, 36, 0.38);
+  background: rgba(120, 53, 15, 0.34);
+  color: #fbbf24;
+}
+
+html[data-theme="dark"] .github-skipped-ref {
+  color: #a9b4c0;
 }
 
 html[data-theme="dark"] .github-import-stat.active,

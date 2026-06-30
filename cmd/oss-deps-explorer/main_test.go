@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -33,6 +35,12 @@ func (f *fakeManager) Dependencies(ctx context.Context, ns, name, version string
 		return res, repo, nil
 	}
 	return map[string]interface{}{"dependencies": map[string]interface{}{}}, repo, nil
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func TestValidateName(t *testing.T) {
@@ -192,6 +200,105 @@ func TestGitHubDependencyLicense(t *testing.T) {
 		if declared != cleanSPDXValue(c.declared) {
 			t.Fatalf("declared=%q want cleaned %q", declared, cleanSPDXValue(c.declared))
 		}
+	}
+}
+
+func TestGitHubUnsupportedDependencyFromSBOM(t *testing.T) {
+	pkg := githubSBOMPackage{
+		Name:             "github.com/actions/checkout",
+		SPDXID:           "SPDXRef-actions-checkout",
+		VersionInfo:      "v4",
+		LicenseConcluded: "NOASSERTION",
+		LicenseDeclared:  "MIT",
+		ExternalRefs: []githubSBOMExternalRef{
+			{ReferenceType: "purl", ReferenceLocator: "pkg:github/actions/checkout@v4"},
+			{ReferenceType: "website", ReferenceLocator: "https://github.com/actions/checkout"},
+			{ReferenceType: "purl", ReferenceLocator: "pkg:github/actions/checkout@v4"},
+		},
+	}
+	dep := githubUnsupportedDependencyFromSBOM(pkg)
+	if dep.Display != "github.com/actions/checkout" ||
+		dep.Version != "v4" ||
+		dep.PURL != "pkg:github/actions/checkout@v4" ||
+		dep.License != "MIT" ||
+		dep.LicenseDeclared != "MIT" ||
+		dep.LicenseConcluded != "" {
+		t.Fatalf("unexpected unsupported package: %+v", dep)
+	}
+	if !reflect.DeepEqual(dep.ExternalRefs, []string{"https://github.com/actions/checkout", "pkg:github/actions/checkout@v4"}) {
+		t.Fatalf("external refs not deduplicated and sorted: %v", dep.ExternalRefs)
+	}
+}
+
+func TestFetchGitHubDependencyGraphIncludesUnsupportedPackages(t *testing.T) {
+	oldClient := http.DefaultClient
+	defer func() { http.DefaultClient = oldClient }()
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.String() != "https://api.github.com/repos/acme/project/dependency-graph/sbom" {
+			t.Fatalf("unexpected GitHub API URL: %s", req.URL.String())
+		}
+		body := `{
+			"sbom": {
+				"packages": [
+					{
+						"name": "lodash",
+						"SPDXID": "SPDXRef-lodash",
+						"versionInfo": "4.17.21",
+						"licenseConcluded": "MIT",
+						"externalRefs": [
+							{"referenceType": "purl", "referenceLocator": "pkg:npm/lodash@4.17.21"}
+						]
+					},
+					{
+						"name": "actions/checkout",
+						"SPDXID": "SPDXRef-actions-checkout",
+						"versionInfo": "v4",
+						"licenseDeclared": "MIT",
+						"externalRefs": [
+							{"referenceType": "purl", "referenceLocator": "pkg:github/actions/checkout@v4"}
+						]
+					},
+					{
+						"name": "ghcr.io/acme/runtime",
+						"SPDXID": "SPDXRef-container",
+						"versionInfo": "sha256:abc",
+						"licenseConcluded": "NOASSERTION",
+						"externalRefs": [
+							{"referenceType": "purl", "referenceLocator": "pkg:oci/runtime@sha256:abc"}
+						]
+					}
+				]
+			}
+		}`
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    req,
+		}, nil
+	})}
+
+	result, err := fetchGitHubDependencyGraph(context.Background(), "acme/project", nil, 0)
+	if err != nil {
+		t.Fatalf("fetchGitHubDependencyGraph unexpected error: %v", err)
+	}
+	if result.Repository != "acme/project" || result.PackageCount != 1 || len(result.Packages) != 1 {
+		t.Fatalf("supported package summary mismatch: %+v", result)
+	}
+	if result.Packages[0].Manager != "npm" || result.Packages[0].Name != "lodash" || result.Packages[0].License != "MIT" {
+		t.Fatalf("supported package mismatch: %+v", result.Packages[0])
+	}
+	if result.UnsupportedCount != 2 || len(result.UnsupportedPackages) != 2 {
+		t.Fatalf("unsupported package summary mismatch: %+v", result)
+	}
+	if result.UnsupportedPackages[0].Name != "actions/checkout" ||
+		result.UnsupportedPackages[0].PURL != "pkg:github/actions/checkout@v4" ||
+		result.UnsupportedPackages[0].License != "MIT" {
+		t.Fatalf("first unsupported package mismatch: %+v", result.UnsupportedPackages[0])
+	}
+	if result.UnsupportedPackages[1].Name != "ghcr.io/acme/runtime" ||
+		result.UnsupportedPackages[1].PURL != "pkg:oci/runtime@sha256:abc" {
+		t.Fatalf("second unsupported package mismatch: %+v", result.UnsupportedPackages[1])
 	}
 }
 

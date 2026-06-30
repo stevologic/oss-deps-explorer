@@ -203,28 +203,45 @@ type githubDependencyPackage struct {
 	LicenseDeclared  string `json:"license_declared,omitempty"`
 }
 
+type githubUnsupportedDependencyPackage struct {
+	Name             string   `json:"name,omitempty"`
+	Version          string   `json:"version,omitempty"`
+	PURL             string   `json:"purl,omitempty"`
+	SPDXID           string   `json:"spdx_id,omitempty"`
+	Display          string   `json:"display"`
+	License          string   `json:"license,omitempty"`
+	LicenseConcluded string   `json:"license_concluded,omitempty"`
+	LicenseDeclared  string   `json:"license_declared,omitempty"`
+	ExternalRefs     []string `json:"external_refs,omitempty"`
+}
+
 type githubDependencyGraphResult struct {
-	Repository       string                    `json:"repository"`
-	Source           string                    `json:"source"`
-	PackageCount     int                       `json:"package_count"`
-	UnsupportedCount int                       `json:"unsupported_count"`
-	Packages         []githubDependencyPackage `json:"packages"`
+	Repository          string                               `json:"repository"`
+	Source              string                               `json:"source"`
+	PackageCount        int                                  `json:"package_count"`
+	UnsupportedCount    int                                  `json:"unsupported_count"`
+	Packages            []githubDependencyPackage            `json:"packages"`
+	UnsupportedPackages []githubUnsupportedDependencyPackage `json:"unsupported_packages,omitempty"`
+}
+
+type githubSBOMExternalRef struct {
+	ReferenceCategory string `json:"referenceCategory"`
+	ReferenceType     string `json:"referenceType"`
+	ReferenceLocator  string `json:"referenceLocator"`
+}
+
+type githubSBOMPackage struct {
+	Name             string                  `json:"name"`
+	SPDXID           string                  `json:"SPDXID"`
+	VersionInfo      string                  `json:"versionInfo"`
+	LicenseConcluded string                  `json:"licenseConcluded"`
+	LicenseDeclared  string                  `json:"licenseDeclared"`
+	ExternalRefs     []githubSBOMExternalRef `json:"externalRefs"`
 }
 
 type githubSBOMResponse struct {
 	SBOM struct {
-		Packages []struct {
-			Name             string `json:"name"`
-			SPDXID           string `json:"SPDXID"`
-			VersionInfo      string `json:"versionInfo"`
-			LicenseConcluded string `json:"licenseConcluded"`
-			LicenseDeclared  string `json:"licenseDeclared"`
-			ExternalRefs     []struct {
-				ReferenceCategory string `json:"referenceCategory"`
-				ReferenceType     string `json:"referenceType"`
-				ReferenceLocator  string `json:"referenceLocator"`
-			} `json:"externalRefs"`
-		} `json:"packages"`
+		Packages []githubSBOMPackage `json:"packages"`
 	} `json:"sbom"`
 }
 
@@ -1341,12 +1358,64 @@ func githubDependencyPackageFromPURL(locator, spdxName, spdxVersion, spdxID stri
 	return dep, true
 }
 
+func githubSBOMExternalRefLocators(refs []githubSBOMExternalRef) []string {
+	seen := map[string]struct{}{}
+	locators := []string{}
+	for _, ref := range refs {
+		locator := strings.TrimSpace(ref.ReferenceLocator)
+		if locator == "" {
+			continue
+		}
+		if _, ok := seen[locator]; ok {
+			continue
+		}
+		seen[locator] = struct{}{}
+		locators = append(locators, locator)
+	}
+	sort.Strings(locators)
+	return locators
+}
+
+func githubFirstPURL(locators []string) string {
+	for _, locator := range locators {
+		if strings.HasPrefix(locator, "pkg:") {
+			return locator
+		}
+	}
+	return ""
+}
+
+func githubUnsupportedDependencyFromSBOM(pkg githubSBOMPackage) githubUnsupportedDependencyPackage {
+	name := strings.TrimSpace(pkg.Name)
+	version := cleanSPDXValue(pkg.VersionInfo)
+	refs := githubSBOMExternalRefLocators(pkg.ExternalRefs)
+	license, concluded, declared := githubDependencyLicense(pkg.LicenseConcluded, pkg.LicenseDeclared)
+	display := name
+	if display == "" {
+		display = githubFirstPURL(refs)
+	}
+	if display == "" {
+		display = strings.TrimSpace(pkg.SPDXID)
+	}
+	return githubUnsupportedDependencyPackage{
+		Name:             name,
+		Version:          version,
+		PURL:             githubFirstPURL(refs),
+		SPDXID:           strings.TrimSpace(pkg.SPDXID),
+		Display:          display,
+		License:          license,
+		LicenseConcluded: concluded,
+		LicenseDeclared:  declared,
+		ExternalRefs:     refs,
+	}
+}
+
 func fetchGitHubDependencyGraph(ctx context.Context, repo string, cache *redisCache, ttl time.Duration) (githubDependencyGraphResult, error) {
 	owner, name, slug, err := parseGitHubRepository(repo)
 	if err != nil {
 		return githubDependencyGraphResult{}, err
 	}
-	key := "github-dependency-graph:" + slug
+	key := "github-dependency-graph:v2:" + slug
 	if val, ok := cache.get(ctx, key); ok {
 		var cached githubDependencyGraphResult
 		if json.Unmarshal([]byte(val), &cached) == nil {
@@ -1382,6 +1451,7 @@ func fetchGitHubDependencyGraph(ctx context.Context, repo string, cache *redisCa
 		Packages:   []githubDependencyPackage{},
 	}
 	seen := map[string]struct{}{}
+	unsupportedSeen := map[string]struct{}{}
 	for _, pkg := range sbom.SBOM.Packages {
 		foundSupported := false
 		for _, ref := range pkg.ExternalRefs {
@@ -1402,7 +1472,13 @@ func fetchGitHubDependencyGraph(ctx context.Context, repo string, cache *redisCa
 			result.Packages = append(result.Packages, dep)
 		}
 		if !foundSupported {
-			result.UnsupportedCount++
+			unsupported := githubUnsupportedDependencyFromSBOM(pkg)
+			key := strings.Join([]string{unsupported.Name, unsupported.Version, unsupported.PURL, unsupported.SPDXID}, "\x00")
+			if _, exists := unsupportedSeen[key]; exists {
+				continue
+			}
+			unsupportedSeen[key] = struct{}{}
+			result.UnsupportedPackages = append(result.UnsupportedPackages, unsupported)
 		}
 	}
 	sort.Slice(result.Packages, func(i, j int) bool {
@@ -1417,6 +1493,15 @@ func fetchGitHubDependencyGraph(ctx context.Context, repo string, cache *redisCa
 		return a.Version > b.Version
 	})
 	result.PackageCount = len(result.Packages)
+	sort.Slice(result.UnsupportedPackages, func(i, j int) bool {
+		a := result.UnsupportedPackages[i]
+		b := result.UnsupportedPackages[j]
+		if strings.ToLower(a.Display) != strings.ToLower(b.Display) {
+			return strings.ToLower(a.Display) < strings.ToLower(b.Display)
+		}
+		return a.Version > b.Version
+	})
+	result.UnsupportedCount = len(result.UnsupportedPackages)
 
 	if data, err := json.Marshal(result); err == nil {
 		cache.set(ctx, key, data, ttl)
