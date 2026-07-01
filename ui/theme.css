@@ -773,9 +773,30 @@ select:focus {
   font-size: 0.86rem;
 }
 
+.github-import-heading {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.github-import-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+}
+
 .github-import-summary strong {
   color: var(--primary-color);
   overflow-wrap: anywhere;
+}
+
+.github-repo-share-link {
+  min-height: 24px;
+  padding: 3px 7px;
+  font-size: 0.72rem;
 }
 
 .github-import-stats {
@@ -944,6 +965,15 @@ button.github-import-stat:focus-visible {
   gap: 6px;
 }
 
+.github-package-list-header .github-package-list-actions {
+  flex: 0 0 auto;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .github-package-list-header strong,
 .github-repo-graph-header strong {
   line-height: 1.2;
@@ -970,6 +1000,21 @@ button.github-import-stat:focus-visible {
   white-space: nowrap;
 }
 
+.github-repo-brief-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 3px 7px;
+  border: 1px solid rgba(18, 128, 92, 0.28);
+  border-radius: 999px;
+  background: #ddf7eb;
+  color: #126b46;
+  font-size: 0.7rem;
+  font-weight: 800;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
 .github-repo-graph-status {
   display: flex;
   flex-wrap: wrap;
@@ -991,6 +1036,43 @@ button.github-import-stat:focus-visible {
   border-color: rgba(181, 107, 0, 0.34);
   background: #fff4d6;
   color: #7a4b00;
+}
+
+.github-repo-export-manifest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: -2px 0 10px;
+  padding: 8px;
+  border: 1px solid rgba(216, 222, 232, 0.92);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.github-repo-export-manifest span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  padding: 4px 8px;
+  border: 1px solid #cdd6e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #475467;
+  font-size: 0.74rem;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.github-repo-export-scope {
+  color: #344054;
+}
+
+.github-repo-export-scope.ready {
+  border-color: rgba(22, 138, 86, 0.28);
+  background: #e8f7ef;
+  color: #168a56;
 }
 
 .github-package-list {
@@ -1387,6 +1469,65 @@ button.github-import-stat:focus-visible {
   color: #6b5310;
 }
 
+.github-package-license-pill {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  min-height: 24px;
+  max-width: 100%;
+  padding: 3px 8px;
+  border: 1px solid rgba(15, 105, 112, 0.28);
+  border-radius: 999px;
+  background: rgba(15, 105, 112, 0.1);
+  color: #0f6970;
+  font-size: 0.72rem;
+  font-weight: 900;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.github-package-license-pill.missing {
+  border-color: rgba(181, 107, 0, 0.34);
+  background: #fff4d6;
+  color: #7a4b00;
+}
+
+.github-package-policy-pill {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  min-height: 24px;
+  max-width: 100%;
+  padding: 3px 8px;
+  border: 1px solid #cdd6e1;
+  border-radius: 999px;
+  background: #eef3f6;
+  color: #344054;
+  font-size: 0.72rem;
+  font-weight: 900;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.github-package-policy-pill.permissive {
+  border-color: rgba(18, 128, 92, 0.32);
+  background: #ddf7eb;
+  color: #126b46;
+}
+
+.github-package-policy-pill.copyleft {
+  border-color: rgba(201, 55, 55, 0.32);
+  background: #ffe8e8;
+  color: #9f241c;
+}
+
+.github-package-policy-pill.review,
+.github-package-policy-pill.missing {
+  border-color: rgba(181, 107, 0, 0.34);
+  background: #fff4d6;
+  color: #7a4b00;
+}
+
 .github-package-detail-actions {
   display: flex;
   align-items: center;
@@ -1445,6 +1586,48 @@ button.github-import-stat:focus-visible {
   box-shadow: 0 6px 16px rgba(0, 229, 255, 0.1);
 }
 
+.github-skipped-package-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 5px;
+  min-width: 0;
+  min-height: 62px;
+  padding: 7px 8px;
+  border: 1px dashed rgba(181, 107, 0, 0.42);
+  border-radius: 6px;
+  background: rgba(255, 244, 214, 0.74);
+  color: var(--text-color);
+}
+
+.github-skipped-package-card .github-package-main {
+  flex-wrap: wrap;
+}
+
+.github-skipped-reason {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  min-height: 19px;
+  padding: 2px 5px;
+  border: 1px solid rgba(181, 107, 0, 0.34);
+  border-radius: 4px;
+  background: #fff8d7;
+  color: #6b5310;
+  font-size: 0.66rem;
+  font-weight: 800;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.github-skipped-ref {
+  min-width: 0;
+  color: var(--neutral-dark-color);
+  font-family: Consolas, "SFMono-Regular", monospace;
+  font-size: 0.7rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
 .github-package-main {
   display: flex;
   align-items: center;
@@ -1484,6 +1667,54 @@ button.github-import-stat:focus-visible {
   line-height: 1.1;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+.github-package-license-badge {
+  flex: 0 1 auto;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 120px;
+  min-height: 19px;
+  padding: 2px 5px;
+  border: 1px solid rgba(15, 105, 112, 0.28);
+  border-radius: 4px;
+  background: rgba(15, 105, 112, 0.08);
+  color: #0f6970;
+  font-size: 0.66rem;
+  font-weight: 800;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.github-package-policy-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  min-height: 19px;
+  padding: 2px 5px;
+  border: 1px solid rgba(181, 107, 0, 0.34);
+  border-radius: 4px;
+  background: #fff4d6;
+  color: #7a4b00;
+  font-size: 0.66rem;
+  font-weight: 800;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.github-package-policy-badge.copyleft {
+  border-color: rgba(201, 55, 55, 0.34);
+  background: #ffe3e3;
+  color: #9f2d2d;
+}
+
+.github-package-policy-badge.missing {
+  border-color: rgba(181, 107, 0, 0.34);
+  background: #fff8d7;
+  color: #6b5310;
 }
 
 .github-package-security-text {
@@ -3331,6 +3562,25 @@ a:hover {
     justify-content: flex-start;
   }
 
+  .github-repo-export-manifest {
+    align-items: stretch;
+  }
+
+  .github-repo-export-manifest span {
+    flex: 1 1 130px;
+    white-space: normal;
+  }
+
+  .github-package-list-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .github-package-list-header .github-package-list-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
   .github-package-grid {
     grid-template-columns: 1fr;
     max-height: 320px;
@@ -4040,6 +4290,18 @@ button:disabled {
 }
 
 .github-import-risk-stat.high {
+  border-color: rgba(201, 55, 55, 0.34);
+  background: #ffe3e3;
+  color: #9f2d2d;
+}
+
+.github-import-policy-stat {
+  border-color: rgba(15, 105, 112, 0.28);
+  background: rgba(15, 105, 112, 0.08);
+  color: #0f6970;
+}
+
+.github-import-policy-stat.high {
   border-color: rgba(201, 55, 55, 0.34);
   background: #ffe3e3;
   color: #9f2d2d;
@@ -5259,6 +5521,7 @@ html[data-theme="dark"] .github-repo-graph-panel,
 html[data-theme="dark"] .github-package-detail,
 html[data-theme="dark"] .github-package-detail-empty,
 html[data-theme="dark"] .github-package-card,
+html[data-theme="dark"] .github-skipped-package-card,
 html[data-theme="dark"] .dependency-box,
 html[data-theme="dark"] .scorecard-box,
 html[data-theme="dark"] .repo-columns,
@@ -5380,9 +5643,37 @@ html[data-theme="dark"] .github-import-stat.github-import-risk-stat.high {
   color: #fca5a5;
 }
 
+html[data-theme="dark"] .github-import-stat.github-import-policy-stat {
+  border-color: rgba(45, 212, 191, 0.34);
+  background: rgba(20, 184, 166, 0.14);
+  color: #67e8d6;
+}
+
+html[data-theme="dark"] .github-import-stat.github-import-policy-stat.high {
+  border-color: rgba(248, 113, 113, 0.36);
+  background: rgba(127, 29, 29, 0.4);
+  color: #fca5a5;
+}
+
+html[data-theme="dark"] .github-skipped-package-card {
+  border-color: rgba(251, 191, 36, 0.38);
+  background: rgba(120, 53, 15, 0.18);
+}
+
+html[data-theme="dark"] .github-skipped-reason {
+  border-color: rgba(251, 191, 36, 0.38);
+  background: rgba(120, 53, 15, 0.34);
+  color: #fbbf24;
+}
+
+html[data-theme="dark"] .github-skipped-ref {
+  color: #a9b4c0;
+}
+
 html[data-theme="dark"] .github-import-stat.active,
 html[data-theme="dark"] .github-import-stat.github-import-risk-stat.active,
-html[data-theme="dark"] .github-import-stat.github-import-risk-stat.high.active {
+html[data-theme="dark"] .github-import-stat.github-import-risk-stat.high.active,
+html[data-theme="dark"] .github-import-stat.github-import-policy-stat.active {
   border-color: #2dd4bf;
   background: #2dd4bf;
   color: #061216;
@@ -5543,6 +5834,40 @@ html[data-theme="dark"] .github-package-security-pill.repo-risk-advisory {
 }
 
 html[data-theme="dark"] .github-package-security-pill.repo-risk-low {
+  border-color: rgba(52, 211, 153, 0.36);
+  background: rgba(6, 78, 59, 0.34);
+  color: #34d399;
+}
+
+html[data-theme="dark"] .github-package-license-badge,
+html[data-theme="dark"] .github-package-license-pill {
+  border-color: rgba(45, 212, 191, 0.34);
+  background: rgba(20, 184, 166, 0.14);
+  color: #67e8d6;
+}
+
+html[data-theme="dark"] .github-package-license-pill.missing {
+  border-color: rgba(251, 191, 36, 0.38);
+  background: rgba(120, 53, 15, 0.34);
+  color: #fbbf24;
+}
+
+html[data-theme="dark"] .github-package-policy-badge,
+html[data-theme="dark"] .github-package-policy-pill.review,
+html[data-theme="dark"] .github-package-policy-pill.missing {
+  border-color: rgba(251, 191, 36, 0.38);
+  background: rgba(120, 53, 15, 0.34);
+  color: #fbbf24;
+}
+
+html[data-theme="dark"] .github-package-policy-badge.copyleft,
+html[data-theme="dark"] .github-package-policy-pill.copyleft {
+  border-color: rgba(248, 113, 113, 0.42);
+  background: rgba(127, 29, 29, 0.42);
+  color: #fca5a5;
+}
+
+html[data-theme="dark"] .github-package-policy-pill.permissive {
   border-color: rgba(52, 211, 153, 0.36);
   background: rgba(6, 78, 59, 0.34);
   color: #34d399;
@@ -5756,6 +6081,23 @@ html[data-theme="dark"] .github-repo-graph-status.warning {
   border-color: rgba(251, 191, 36, 0.3);
   background: rgba(120, 53, 15, 0.28);
   color: #fbbf24;
+}
+
+html[data-theme="dark"] .github-repo-export-manifest {
+  border-color: #2f3e4c;
+  background: rgba(15, 23, 32, 0.72);
+}
+
+html[data-theme="dark"] .github-repo-export-manifest span {
+  border-color: #344454;
+  background: #17212b;
+  color: #cbd5e1;
+}
+
+html[data-theme="dark"] .github-repo-export-scope.ready {
+  border-color: rgba(52, 211, 153, 0.34);
+  background: rgba(6, 78, 59, 0.32);
+  color: #34d399;
 }
 
 html[data-theme="dark"] .graph-controls,

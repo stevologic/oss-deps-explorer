@@ -191,37 +191,57 @@ var purlTypeToManager = map[string]string{
 }
 
 type githubDependencyPackage struct {
-	Manager   string `json:"manager"`
-	Namespace string `json:"namespace,omitempty"`
-	Name      string `json:"name"`
-	Version   string `json:"version,omitempty"`
-	PURL      string `json:"purl"`
-	SPDXID    string `json:"spdx_id,omitempty"`
-	Display   string `json:"display"`
+	Manager          string `json:"manager"`
+	Namespace        string `json:"namespace,omitempty"`
+	Name             string `json:"name"`
+	Version          string `json:"version,omitempty"`
+	PURL             string `json:"purl"`
+	SPDXID           string `json:"spdx_id,omitempty"`
+	Display          string `json:"display"`
+	License          string `json:"license,omitempty"`
+	LicenseConcluded string `json:"license_concluded,omitempty"`
+	LicenseDeclared  string `json:"license_declared,omitempty"`
+}
+
+type githubUnsupportedDependencyPackage struct {
+	Name             string   `json:"name,omitempty"`
+	Version          string   `json:"version,omitempty"`
+	PURL             string   `json:"purl,omitempty"`
+	SPDXID           string   `json:"spdx_id,omitempty"`
+	Display          string   `json:"display"`
+	License          string   `json:"license,omitempty"`
+	LicenseConcluded string   `json:"license_concluded,omitempty"`
+	LicenseDeclared  string   `json:"license_declared,omitempty"`
+	ExternalRefs     []string `json:"external_refs,omitempty"`
 }
 
 type githubDependencyGraphResult struct {
-	Repository       string                    `json:"repository"`
-	Source           string                    `json:"source"`
-	PackageCount     int                       `json:"package_count"`
-	UnsupportedCount int                       `json:"unsupported_count"`
-	Packages         []githubDependencyPackage `json:"packages"`
+	Repository          string                               `json:"repository"`
+	Source              string                               `json:"source"`
+	PackageCount        int                                  `json:"package_count"`
+	UnsupportedCount    int                                  `json:"unsupported_count"`
+	Packages            []githubDependencyPackage            `json:"packages"`
+	UnsupportedPackages []githubUnsupportedDependencyPackage `json:"unsupported_packages,omitempty"`
+}
+
+type githubSBOMExternalRef struct {
+	ReferenceCategory string `json:"referenceCategory"`
+	ReferenceType     string `json:"referenceType"`
+	ReferenceLocator  string `json:"referenceLocator"`
+}
+
+type githubSBOMPackage struct {
+	Name             string                  `json:"name"`
+	SPDXID           string                  `json:"SPDXID"`
+	VersionInfo      string                  `json:"versionInfo"`
+	LicenseConcluded string                  `json:"licenseConcluded"`
+	LicenseDeclared  string                  `json:"licenseDeclared"`
+	ExternalRefs     []githubSBOMExternalRef `json:"externalRefs"`
 }
 
 type githubSBOMResponse struct {
 	SBOM struct {
-		Packages []struct {
-			Name             string `json:"name"`
-			SPDXID           string `json:"SPDXID"`
-			VersionInfo      string `json:"versionInfo"`
-			LicenseConcluded string `json:"licenseConcluded"`
-			LicenseDeclared  string `json:"licenseDeclared"`
-			ExternalRefs     []struct {
-				ReferenceCategory string `json:"referenceCategory"`
-				ReferenceType     string `json:"referenceType"`
-				ReferenceLocator  string `json:"referenceLocator"`
-			} `json:"externalRefs"`
-		} `json:"packages"`
+		Packages []githubSBOMPackage `json:"packages"`
 	} `json:"sbom"`
 }
 
@@ -439,6 +459,10 @@ func cacheKey(pm, ns, name, version string, recursive, vuln, score bool) string 
 	return key
 }
 
+func graphCacheKey(key string) string {
+	return key + ":dot"
+}
+
 func purlCacheKey(purl string, recursive, vuln, score, graph bool) string {
 	key := fmt.Sprintf("purl:%s", purl)
 	if recursive {
@@ -618,19 +642,164 @@ func collectScorecards(ctx context.Context, manager, ns, name string, deps map[s
 	return result
 }
 
-func depsToDot(root string, deps map[string]interface{}) string {
+func dotQuote(label string) string {
+	return strconv.Quote(label)
+}
+
+func scorecardScore(scorecard interface{}) string {
+	sc, ok := scorecard.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	if score, ok := sc["score"]; ok {
+		return fmt.Sprint(score)
+	}
+	if nested, ok := sc["scorecard"].(map[string]interface{}); ok {
+		if score, ok := nested["score"]; ok {
+			return fmt.Sprint(score)
+		}
+	}
+	return ""
+}
+
+func dotStatusColor(status vulnerabilityStatus) string {
+	switch status.Status {
+	case "vulnerable":
+		return "#fecaca"
+	case "no_advisory":
+		return "#bbf7d0"
+	case "unknown":
+		return "#fde68a"
+	case "not_checked":
+		return "#e5e7eb"
+	default:
+		return "#ffffff"
+	}
+}
+
+func writeDotLegend(b *strings.Builder) {
+	b.WriteString("    subgraph cluster_legend {\n")
+	b.WriteString("        label=\"OSV status\"\n")
+	b.WriteString("        color=\"#cbd5e1\"\n")
+	b.WriteString("        style=\"rounded\"\n")
+	b.WriteString("        \"__legend_vulnerable\" [label=\"vulnerable\" style=\"filled\" fillcolor=\"#fecaca\"]\n")
+	b.WriteString("        \"__legend_no_advisory\" [label=\"no advisory\" style=\"filled\" fillcolor=\"#bbf7d0\"]\n")
+	b.WriteString("        \"__legend_unknown\" [label=\"unknown\" style=\"filled\" fillcolor=\"#fde68a\"]\n")
+	b.WriteString("        \"__legend_not_checked\" [label=\"not checked\" style=\"filled\" fillcolor=\"#e5e7eb\"]\n")
+	b.WriteString("    }\n")
+}
+
+func depsToDot(root, rootVersion string, deps map[string]interface{}, parents map[string][]string, repos map[string]string, vulnStatus map[string]vulnerabilityStatus, scorecards map[string]interface{}) string {
 	var b strings.Builder
 	b.WriteString("digraph deps {\n")
-	keys := make([]string, 0, len(deps))
-	for k := range deps {
-		keys = append(keys, k)
+	b.WriteString("    node [shape=box]\n")
+	type node struct {
+		id         string
+		label      string
+		version    string
+		repository string
+		osvStatus  vulnerabilityStatus
+		scorecard  string
 	}
-	sort.Strings(keys)
-	for _, dep := range keys {
-		fmt.Fprintf(&b, "    \"%s\" -> \"%s\"\n", root, dep)
+	type edge struct {
+		from string
+		to   string
 	}
+	nodes := []node{{
+		id:         root,
+		label:      root,
+		version:    rootVersion,
+		repository: repos[root],
+		osvStatus:  vulnStatus[root],
+		scorecard:  scorecardScore(scorecards[root]),
+	}}
+	depKeys := make([]string, 0, len(deps))
+	for dep := range deps {
+		depKeys = append(depKeys, dep)
+	}
+	sort.Strings(depKeys)
+	for _, dep := range depKeys {
+		version := ""
+		if deps[dep] != nil {
+			version = fmt.Sprint(deps[dep])
+		}
+		label := dep
+		if version != "" {
+			label = dep + "\n" + version
+		}
+		nodes = append(nodes, node{
+			id:         dep,
+			label:      label,
+			version:    version,
+			repository: repos[dep],
+			osvStatus:  vulnStatus[dep],
+			scorecard:  scorecardScore(scorecards[dep]),
+		})
+	}
+	for _, n := range nodes {
+		attrs := []string{fmt.Sprintf("label=%s", dotQuote(n.label))}
+		attrs = append(attrs, "style=\"filled\"")
+		attrs = append(attrs, fmt.Sprintf("fillcolor=%s", dotQuote(dotStatusColor(n.osvStatus))))
+		if n.version != "" {
+			attrs = append(attrs, fmt.Sprintf("version=%s", dotQuote(n.version)))
+		}
+		if n.repository != "" {
+			attrs = append(attrs, fmt.Sprintf("repository=%s", dotQuote(n.repository)))
+			attrs = append(attrs, fmt.Sprintf("URL=%s", dotQuote(n.repository)))
+		}
+		if n.osvStatus.Status != "" {
+			attrs = append(attrs, fmt.Sprintf("osv_status=%s", dotQuote(n.osvStatus.Status)))
+			attrs = append(attrs, fmt.Sprintf("osv_checked=%s", dotQuote(strconv.FormatBool(n.osvStatus.Checked))))
+			attrs = append(attrs, fmt.Sprintf("advisory_count=%s", dotQuote(strconv.Itoa(n.osvStatus.AdvisoryCount))))
+			if n.osvStatus.Error != "" {
+				attrs = append(attrs, fmt.Sprintf("osv_error=%s", dotQuote(n.osvStatus.Error)))
+			}
+		}
+		if n.scorecard != "" {
+			attrs = append(attrs, fmt.Sprintf("scorecard_score=%s", dotQuote(n.scorecard)))
+		}
+		fmt.Fprintf(&b, "    %s [%s]\n", dotQuote(n.id), strings.Join(attrs, " "))
+	}
+	edges := make([]edge, 0, len(deps))
+	for _, dep := range depKeys {
+		ps := parents[dep]
+		if len(ps) == 0 {
+			ps = []string{""}
+		}
+		for _, parent := range ps {
+			from := parent
+			if from == "" {
+				from = root
+			}
+			edges = append(edges, edge{from: from, to: dep})
+		}
+	}
+	sort.Slice(edges, func(i, j int) bool {
+		if edges[i].from == edges[j].from {
+			return edges[i].to < edges[j].to
+		}
+		return edges[i].from < edges[j].from
+	})
+	for _, e := range edges {
+		fmt.Fprintf(&b, "    %s -> %s\n", dotQuote(e.from), dotQuote(e.to))
+	}
+	writeDotLegend(&b)
 	b.WriteString("}\n")
 	return b.String()
+}
+
+func dependencyGraphDot(ctx context.Context, managerName, ns, name, version string, deps map[string]interface{}, parents map[string][]string, cache *redisCache, ttl time.Duration, withVuln, withScorecard bool) string {
+	depMap, _ := deps["dependencies"].(map[string]interface{})
+	repoMap, _ := deps["repositories"].(map[string]string)
+	vulnStatus := map[string]vulnerabilityStatus{}
+	if withVuln {
+		vulnStatus = collectVulnerabilities(ctx, managerName, ns, name, version, depMap, cache, ttl).Status
+	}
+	scorecards := map[string]interface{}{}
+	if withScorecard {
+		scorecards = collectScorecards(ctx, managerName, ns, name, depMap, repoMap, cache, ttl)
+	}
+	return depsToDot(formatPackage(managerName, ns, name), version, depMap, parents, repoMap, vulnStatus, scorecards)
 }
 
 type packageSuggestion struct {
@@ -1138,6 +1307,15 @@ func cleanSPDXValue(value string) string {
 	}
 }
 
+func githubDependencyLicense(concluded, declared string) (string, string, string) {
+	cleanConcluded := cleanSPDXValue(concluded)
+	cleanDeclared := cleanSPDXValue(declared)
+	if cleanConcluded != "" {
+		return cleanConcluded, cleanConcluded, cleanDeclared
+	}
+	return cleanDeclared, cleanConcluded, cleanDeclared
+}
+
 func githubDependencyDisplayName(managerName, namespace, name string) string {
 	if namespace == "" {
 		return name
@@ -1180,12 +1358,64 @@ func githubDependencyPackageFromPURL(locator, spdxName, spdxVersion, spdxID stri
 	return dep, true
 }
 
+func githubSBOMExternalRefLocators(refs []githubSBOMExternalRef) []string {
+	seen := map[string]struct{}{}
+	locators := []string{}
+	for _, ref := range refs {
+		locator := strings.TrimSpace(ref.ReferenceLocator)
+		if locator == "" {
+			continue
+		}
+		if _, ok := seen[locator]; ok {
+			continue
+		}
+		seen[locator] = struct{}{}
+		locators = append(locators, locator)
+	}
+	sort.Strings(locators)
+	return locators
+}
+
+func githubFirstPURL(locators []string) string {
+	for _, locator := range locators {
+		if strings.HasPrefix(locator, "pkg:") {
+			return locator
+		}
+	}
+	return ""
+}
+
+func githubUnsupportedDependencyFromSBOM(pkg githubSBOMPackage) githubUnsupportedDependencyPackage {
+	name := strings.TrimSpace(pkg.Name)
+	version := cleanSPDXValue(pkg.VersionInfo)
+	refs := githubSBOMExternalRefLocators(pkg.ExternalRefs)
+	license, concluded, declared := githubDependencyLicense(pkg.LicenseConcluded, pkg.LicenseDeclared)
+	display := name
+	if display == "" {
+		display = githubFirstPURL(refs)
+	}
+	if display == "" {
+		display = strings.TrimSpace(pkg.SPDXID)
+	}
+	return githubUnsupportedDependencyPackage{
+		Name:             name,
+		Version:          version,
+		PURL:             githubFirstPURL(refs),
+		SPDXID:           strings.TrimSpace(pkg.SPDXID),
+		Display:          display,
+		License:          license,
+		LicenseConcluded: concluded,
+		LicenseDeclared:  declared,
+		ExternalRefs:     refs,
+	}
+}
+
 func fetchGitHubDependencyGraph(ctx context.Context, repo string, cache *redisCache, ttl time.Duration) (githubDependencyGraphResult, error) {
 	owner, name, slug, err := parseGitHubRepository(repo)
 	if err != nil {
 		return githubDependencyGraphResult{}, err
 	}
-	key := "github-dependency-graph:" + slug
+	key := "github-dependency-graph:v2:" + slug
 	if val, ok := cache.get(ctx, key); ok {
 		var cached githubDependencyGraphResult
 		if json.Unmarshal([]byte(val), &cached) == nil {
@@ -1221,6 +1451,7 @@ func fetchGitHubDependencyGraph(ctx context.Context, repo string, cache *redisCa
 		Packages:   []githubDependencyPackage{},
 	}
 	seen := map[string]struct{}{}
+	unsupportedSeen := map[string]struct{}{}
 	for _, pkg := range sbom.SBOM.Packages {
 		foundSupported := false
 		for _, ref := range pkg.ExternalRefs {
@@ -1231,6 +1462,7 @@ func fetchGitHubDependencyGraph(ctx context.Context, repo string, cache *redisCa
 			if !ok {
 				continue
 			}
+			dep.License, dep.LicenseConcluded, dep.LicenseDeclared = githubDependencyLicense(pkg.LicenseConcluded, pkg.LicenseDeclared)
 			foundSupported = true
 			key := strings.Join([]string{dep.Manager, dep.Namespace, dep.Name, dep.Version}, "\x00")
 			if _, exists := seen[key]; exists {
@@ -1240,7 +1472,13 @@ func fetchGitHubDependencyGraph(ctx context.Context, repo string, cache *redisCa
 			result.Packages = append(result.Packages, dep)
 		}
 		if !foundSupported {
-			result.UnsupportedCount++
+			unsupported := githubUnsupportedDependencyFromSBOM(pkg)
+			key := strings.Join([]string{unsupported.Name, unsupported.Version, unsupported.PURL, unsupported.SPDXID}, "\x00")
+			if _, exists := unsupportedSeen[key]; exists {
+				continue
+			}
+			unsupportedSeen[key] = struct{}{}
+			result.UnsupportedPackages = append(result.UnsupportedPackages, unsupported)
 		}
 	}
 	sort.Slice(result.Packages, func(i, j int) bool {
@@ -1255,6 +1493,15 @@ func fetchGitHubDependencyGraph(ctx context.Context, repo string, cache *redisCa
 		return a.Version > b.Version
 	})
 	result.PackageCount = len(result.Packages)
+	sort.Slice(result.UnsupportedPackages, func(i, j int) bool {
+		a := result.UnsupportedPackages[i]
+		b := result.UnsupportedPackages[j]
+		if strings.ToLower(a.Display) != strings.ToLower(b.Display) {
+			return strings.ToLower(a.Display) < strings.ToLower(b.Display)
+		}
+		return a.Version > b.Version
+	})
+	result.UnsupportedCount = len(result.UnsupportedPackages)
 
 	if data, err := json.Marshal(result); err == nil {
 		cache.set(ctx, key, data, ttl)
@@ -1565,6 +1812,19 @@ func main() {
 
 	cache := newRedisCache(cfg)
 
+	handler := buildRouter(cfg, cache, recurse, withVuln, withScorecard, withGraph)
+	addr := ":" + cfg.Server.Port
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: withCORS(handler),
+	}
+	log.Printf("starting server on %s", addr)
+	if err := srv.ListenAndServe(); err != nil {
+		log.Fatalf("server error: %v", err)
+	}
+}
+
+func buildRouter(cfg *config.Config, cache *redisCache, recurse, withVuln, withScorecard, withGraph bool) http.Handler {
 	r := mux.NewRouter()
 	r.UseEncodedPath()
 	r.Use(logRequests)
@@ -1693,9 +1953,10 @@ func main() {
 		ns := q.Get("namespace")
 		name := q.Get("name")
 		version := q.Get("version")
-		recursive := q.Get("recursive") == "true"
-		vflag := q.Get("vuln") == "true"
-		sflag := q.Get("scorecard") == "true"
+		recursive := queryBool(req, "recursive", false)
+		vflag := queryBool(req, "vuln", false)
+		sflag := queryBool(req, "scorecard", false)
+		gflag := queryBool(req, "graph", withGraph)
 
 		if pm == "" || name == "" || version == "" {
 			http.Error(w, "manager, name and version required", http.StatusBadRequest)
@@ -1718,15 +1979,22 @@ func main() {
 		}
 
 		key := cacheKey(pm, ns, name, version, recursive, vflag, sflag)
+		if gflag {
+			key = graphCacheKey(key)
+		}
 		ctx := req.Context()
 		if val, ok := cache.get(ctx, key); ok {
-			w.Header().Set("Content-Type", "application/json")
+			if gflag {
+				w.Header().Set("Content-Type", "text/vnd.graphviz")
+			} else {
+				w.Header().Set("Content-Type", "application/json")
+			}
 			w.Header().Set("X-Cache-Status", "HIT")
 			w.Write([]byte(val))
 			return
 		}
 
-		deps, _, errs, err := fetchAllDeps(ctx, m, ns, name, version, recursive, map[string]struct{}{}, "", pm, cache, cfg.Cache.TTL)
+		deps, parents, errs, err := fetchAllDeps(ctx, m, ns, name, version, recursive, map[string]struct{}{}, "", pm, cache, cfg.Cache.TTL)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -1734,8 +2002,16 @@ func main() {
 		if len(errs) > 0 {
 			deps["errors"] = errs
 		}
+		depMap, _ := deps["dependencies"].(map[string]interface{})
+		if gflag {
+			dot := dependencyGraphDot(ctx, pm, ns, name, version, deps, parents, cache, cfg.Cache.TTL, vflag, sflag)
+			cache.set(ctx, key, []byte(dot), cfg.Cache.TTL)
+			w.Header().Set("Content-Type", "text/vnd.graphviz")
+			w.Header().Set("X-Cache-Status", "MISS")
+			w.Write([]byte(dot))
+			return
+		}
 		if vflag {
-			depMap, _ := deps["dependencies"].(map[string]interface{})
 			vulns := collectVulnerabilities(ctx, pm, ns, name, version, depMap, cache, cfg.Cache.TTL)
 			if len(vulns.Vulnerabilities) > 0 {
 				deps["vulnerabilities"] = vulns.Vulnerabilities
@@ -1745,7 +2021,6 @@ func main() {
 			}
 		}
 		if sflag {
-			depMap, _ := deps["dependencies"].(map[string]interface{})
 			repoMap, _ := deps["repositories"].(map[string]string)
 			scs := collectScorecards(ctx, pm, ns, name, depMap, repoMap, cache, cfg.Cache.TTL)
 			if len(scs) > 0 {
@@ -1799,16 +2074,24 @@ func main() {
 		reqRecurse := queryBool(req, "recursive", recurse)
 		reqVuln := queryBool(req, "vuln", withVuln)
 		reqScore := queryBool(req, "scorecard", withScorecard)
+		reqGraph := queryBool(req, "graph", withGraph)
 		key := cacheKey("go", ns, name, version, reqRecurse, reqVuln, reqScore)
+		if reqGraph {
+			key = graphCacheKey(key)
+		}
 		ctx := req.Context()
 		if cached, ok := cache.get(ctx, key); ok {
-			w.Header().Set("Content-Type", "application/json")
+			if reqGraph {
+				w.Header().Set("Content-Type", "text/vnd.graphviz")
+			} else {
+				w.Header().Set("Content-Type", "application/json")
+			}
 			w.Header().Set("X-Cache-Status", "HIT")
 			w.Write([]byte(cached))
 			return
 		}
 
-		deps, _, errs, err := fetchAllDeps(ctx, m, ns, name, version, reqRecurse, map[string]struct{}{}, "", "go", cache, cfg.Cache.TTL)
+		deps, parents, errs, err := fetchAllDeps(ctx, m, ns, name, version, reqRecurse, map[string]struct{}{}, "", "go", cache, cfg.Cache.TTL)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -1816,10 +2099,17 @@ func main() {
 		if len(errs) > 0 {
 			deps["errors"] = errs
 		}
+		depMap, _ := deps["dependencies"].(map[string]interface{})
+		if reqGraph {
+			dot := dependencyGraphDot(ctx, "go", ns, name, version, deps, parents, cache, cfg.Cache.TTL, reqVuln, reqScore)
+			cache.set(ctx, key, []byte(dot), cfg.Cache.TTL)
+			w.Header().Set("Content-Type", "text/vnd.graphviz")
+			w.Header().Set("X-Cache-Status", "MISS")
+			w.Write([]byte(dot))
+			return
+		}
 
 		if reqVuln {
-			depMap, _ := deps["dependencies"].(map[string]interface{})
-
 			vulns := collectVulnerabilities(ctx, "go", ns, name, version, depMap, cache, cfg.Cache.TTL)
 			if len(vulns.Vulnerabilities) > 0 {
 				deps["vulnerabilities"] = vulns.Vulnerabilities
@@ -1829,7 +2119,6 @@ func main() {
 			}
 		}
 		if reqScore {
-			depMap, _ := deps["dependencies"].(map[string]interface{})
 			repoMap, _ := deps["repositories"].(map[string]string)
 			scs := collectScorecards(ctx, "go", ns, name, depMap, repoMap, cache, cfg.Cache.TTL)
 			if len(scs) > 0 {
@@ -1897,7 +2186,7 @@ func main() {
 			return
 		}
 
-		deps, _, errs, err := fetchAllDeps(ctx, m, ns, name, version, reqRecurse, map[string]struct{}{}, "", pm, cache, cfg.Cache.TTL)
+		deps, parents, errs, err := fetchAllDeps(ctx, m, ns, name, version, reqRecurse, map[string]struct{}{}, "", pm, cache, cfg.Cache.TTL)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -1907,7 +2196,7 @@ func main() {
 		}
 		depMap, _ := deps["dependencies"].(map[string]interface{})
 		if reqGraph {
-			dot := depsToDot(formatPackage(pm, ns, name), depMap)
+			dot := dependencyGraphDot(ctx, pm, ns, name, version, deps, parents, cache, cfg.Cache.TTL, reqVuln, reqScore)
 			cache.set(ctx, key, []byte(dot), cfg.Cache.TTL)
 			w.Header().Set("Content-Type", "text/vnd.graphviz")
 			w.Header().Set("X-Cache-Status", "MISS")
@@ -1985,16 +2274,24 @@ func main() {
 		reqRecurse := queryBool(req, "recursive", recurse)
 		reqVuln := queryBool(req, "vuln", withVuln)
 		reqScore := queryBool(req, "scorecard", withScorecard)
+		reqGraph := queryBool(req, "graph", withGraph)
 		key := cacheKey(pm, ns, name, version, reqRecurse, reqVuln, reqScore)
+		if reqGraph {
+			key = graphCacheKey(key)
+		}
 		ctx := req.Context()
 		if cached, ok := cache.get(ctx, key); ok {
-			w.Header().Set("Content-Type", "application/json")
+			if reqGraph {
+				w.Header().Set("Content-Type", "text/vnd.graphviz")
+			} else {
+				w.Header().Set("Content-Type", "application/json")
+			}
 			w.Header().Set("X-Cache-Status", "HIT")
 			w.Write([]byte(cached))
 			return
 		}
 
-		deps, _, errs, err := fetchAllDeps(ctx, m, ns, name, version, reqRecurse, map[string]struct{}{}, "", pm, cache, cfg.Cache.TTL)
+		deps, parents, errs, err := fetchAllDeps(ctx, m, ns, name, version, reqRecurse, map[string]struct{}{}, "", pm, cache, cfg.Cache.TTL)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -2002,10 +2299,17 @@ func main() {
 		if len(errs) > 0 {
 			deps["errors"] = errs
 		}
+		depMap, _ := deps["dependencies"].(map[string]interface{})
+		if reqGraph {
+			dot := dependencyGraphDot(ctx, pm, ns, name, version, deps, parents, cache, cfg.Cache.TTL, reqVuln, reqScore)
+			cache.set(ctx, key, []byte(dot), cfg.Cache.TTL)
+			w.Header().Set("Content-Type", "text/vnd.graphviz")
+			w.Header().Set("X-Cache-Status", "MISS")
+			w.Write([]byte(dot))
+			return
+		}
 
 		if reqVuln {
-			depMap, _ := deps["dependencies"].(map[string]interface{})
-
 			vulns := collectVulnerabilities(ctx, pm, ns, name, version, depMap, cache, cfg.Cache.TTL)
 			if len(vulns.Vulnerabilities) > 0 {
 				deps["vulnerabilities"] = vulns.Vulnerabilities
@@ -2015,7 +2319,6 @@ func main() {
 			}
 		}
 		if reqScore {
-			depMap, _ := deps["dependencies"].(map[string]interface{})
 			repoMap, _ := deps["repositories"].(map[string]string)
 			scs := collectScorecards(ctx, pm, ns, name, depMap, repoMap, cache, cfg.Cache.TTL)
 			if len(scs) > 0 {
@@ -2066,16 +2369,24 @@ func main() {
 		reqRecurse := queryBool(req, "recursive", recurse)
 		reqVuln := queryBool(req, "vuln", withVuln)
 		reqScore := queryBool(req, "scorecard", withScorecard)
+		reqGraph := queryBool(req, "graph", withGraph)
 		key := cacheKey(pm, "", name, version, reqRecurse, reqVuln, reqScore)
+		if reqGraph {
+			key = graphCacheKey(key)
+		}
 		ctx := req.Context()
 		if cached, ok := cache.get(ctx, key); ok {
-			w.Header().Set("Content-Type", "application/json")
+			if reqGraph {
+				w.Header().Set("Content-Type", "text/vnd.graphviz")
+			} else {
+				w.Header().Set("Content-Type", "application/json")
+			}
 			w.Header().Set("X-Cache-Status", "HIT")
 			w.Write([]byte(cached))
 			return
 		}
 
-		deps, _, errs, err := fetchAllDeps(ctx, m, "", name, version, reqRecurse, map[string]struct{}{}, "", pm, cache, cfg.Cache.TTL)
+		deps, parents, errs, err := fetchAllDeps(ctx, m, "", name, version, reqRecurse, map[string]struct{}{}, "", pm, cache, cfg.Cache.TTL)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -2083,10 +2394,17 @@ func main() {
 		if len(errs) > 0 {
 			deps["errors"] = errs
 		}
+		depMap, _ := deps["dependencies"].(map[string]interface{})
+		if reqGraph {
+			dot := dependencyGraphDot(ctx, pm, "", name, version, deps, parents, cache, cfg.Cache.TTL, reqVuln, reqScore)
+			cache.set(ctx, key, []byte(dot), cfg.Cache.TTL)
+			w.Header().Set("Content-Type", "text/vnd.graphviz")
+			w.Header().Set("X-Cache-Status", "MISS")
+			w.Write([]byte(dot))
+			return
+		}
 
 		if reqVuln {
-			depMap, _ := deps["dependencies"].(map[string]interface{})
-
 			vulns := collectVulnerabilities(ctx, pm, "", name, version, depMap, cache, cfg.Cache.TTL)
 			if len(vulns.Vulnerabilities) > 0 {
 				deps["vulnerabilities"] = vulns.Vulnerabilities
@@ -2096,7 +2414,6 @@ func main() {
 			}
 		}
 		if reqScore {
-			depMap, _ := deps["dependencies"].(map[string]interface{})
 			repoMap, _ := deps["repositories"].(map[string]string)
 			scs := collectScorecards(ctx, pm, "", name, depMap, repoMap, cache, cfg.Cache.TTL)
 			if len(scs) > 0 {
@@ -2117,13 +2434,5 @@ func main() {
 	// serve static UI
 	r.PathPrefix("/").Handler(http.FileServer(http.Dir("./ui")))
 
-	addr := ":" + cfg.Server.Port
-	srv := &http.Server{
-		Addr:    addr,
-		Handler: withCORS(r),
-	}
-	log.Printf("starting server on %s", addr)
-	if err := srv.ListenAndServe(); err != nil {
-		log.Fatalf("server error: %v", err)
-	}
+	return r
 }

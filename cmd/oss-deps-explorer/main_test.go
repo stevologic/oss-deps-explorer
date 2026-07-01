@@ -2,10 +2,16 @@ package main
 
 import (
 	"context"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/example/oss-deps-explorer/internal/config"
+	"github.com/example/oss-deps-explorer/internal/manager"
 )
 
 type fakeManager struct {
@@ -33,6 +39,71 @@ func (f *fakeManager) Dependencies(ctx context.Context, ns, name, version string
 		return res, repo, nil
 	}
 	return map[string]interface{}{"dependencies": map[string]interface{}{}}, repo, nil
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func newGraphTestRouter(t *testing.T, withGraph bool) http.Handler {
+	t.Helper()
+	oldRegistry := Registry
+	Registry = map[string]manager.Manager{
+		"npm": &fakeManager{
+			deps: map[string]map[string]interface{}{
+				":root:1.0.0": {"dep": "2.0.0"},
+			},
+		},
+	}
+	t.Cleanup(func() {
+		Registry = oldRegistry
+	})
+	return buildRouter(&config.Config{}, nil, false, false, false, withGraph)
+}
+
+func TestLookupGraphResponseHeaders(t *testing.T) {
+	handler := newGraphTestRouter(t, false)
+	req := httptest.NewRequest(http.MethodGet, "/api/lookup?manager=npm&name=root&version=1.0.0&graph=true", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/vnd.graphviz" {
+		t.Fatalf("content type=%q, want text/vnd.graphviz", got)
+	}
+	if got := rec.Header().Get("X-Cache-Status"); got != "MISS" {
+		t.Fatalf("cache status=%q, want MISS", got)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "digraph deps") || !strings.Contains(body, `"root" -> "dep"`) {
+		t.Fatalf("response body is not the expected DOT graph:\n%s", body)
+	}
+}
+
+func TestDependenciesRouteUsesDefaultGraphMode(t *testing.T) {
+	handler := newGraphTestRouter(t, true)
+	req := httptest.NewRequest(http.MethodGet, "/api/dependencies/npm/root/1.0.0", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/vnd.graphviz" {
+		t.Fatalf("content type=%q, want text/vnd.graphviz", got)
+	}
+	if got := rec.Header().Get("X-Cache-Status"); got != "MISS" {
+		t.Fatalf("cache status=%q, want MISS", got)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `"root" -> "dep"`) {
+		t.Fatalf("response body is not the expected dependency graph:\n%s", body)
+	}
 }
 
 func TestValidateName(t *testing.T) {
@@ -170,6 +241,130 @@ func TestGitHubDependencyPackageFromPURL(t *testing.T) {
 	}
 }
 
+func TestGitHubDependencyLicense(t *testing.T) {
+	cases := []struct {
+		concluded string
+		declared  string
+		license   string
+	}{
+		{" MIT ", "Apache-2.0", "MIT"},
+		{"NOASSERTION", "BSD-3-Clause", "BSD-3-Clause"},
+		{"NONE", "NOASSERTION", ""},
+		{"", "ISC", "ISC"},
+	}
+	for _, c := range cases {
+		license, concluded, declared := githubDependencyLicense(c.concluded, c.declared)
+		if license != c.license {
+			t.Fatalf("githubDependencyLicense(%q,%q) license=%q want %q", c.concluded, c.declared, license, c.license)
+		}
+		if concluded != cleanSPDXValue(c.concluded) {
+			t.Fatalf("concluded=%q want cleaned %q", concluded, cleanSPDXValue(c.concluded))
+		}
+		if declared != cleanSPDXValue(c.declared) {
+			t.Fatalf("declared=%q want cleaned %q", declared, cleanSPDXValue(c.declared))
+		}
+	}
+}
+
+func TestGitHubUnsupportedDependencyFromSBOM(t *testing.T) {
+	pkg := githubSBOMPackage{
+		Name:             "github.com/actions/checkout",
+		SPDXID:           "SPDXRef-actions-checkout",
+		VersionInfo:      "v4",
+		LicenseConcluded: "NOASSERTION",
+		LicenseDeclared:  "MIT",
+		ExternalRefs: []githubSBOMExternalRef{
+			{ReferenceType: "purl", ReferenceLocator: "pkg:github/actions/checkout@v4"},
+			{ReferenceType: "website", ReferenceLocator: "https://github.com/actions/checkout"},
+			{ReferenceType: "purl", ReferenceLocator: "pkg:github/actions/checkout@v4"},
+		},
+	}
+	dep := githubUnsupportedDependencyFromSBOM(pkg)
+	if dep.Display != "github.com/actions/checkout" ||
+		dep.Version != "v4" ||
+		dep.PURL != "pkg:github/actions/checkout@v4" ||
+		dep.License != "MIT" ||
+		dep.LicenseDeclared != "MIT" ||
+		dep.LicenseConcluded != "" {
+		t.Fatalf("unexpected unsupported package: %+v", dep)
+	}
+	if !reflect.DeepEqual(dep.ExternalRefs, []string{"https://github.com/actions/checkout", "pkg:github/actions/checkout@v4"}) {
+		t.Fatalf("external refs not deduplicated and sorted: %v", dep.ExternalRefs)
+	}
+}
+
+func TestFetchGitHubDependencyGraphIncludesUnsupportedPackages(t *testing.T) {
+	oldClient := http.DefaultClient
+	defer func() { http.DefaultClient = oldClient }()
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.String() != "https://api.github.com/repos/acme/project/dependency-graph/sbom" {
+			t.Fatalf("unexpected GitHub API URL: %s", req.URL.String())
+		}
+		body := `{
+			"sbom": {
+				"packages": [
+					{
+						"name": "lodash",
+						"SPDXID": "SPDXRef-lodash",
+						"versionInfo": "4.17.21",
+						"licenseConcluded": "MIT",
+						"externalRefs": [
+							{"referenceType": "purl", "referenceLocator": "pkg:npm/lodash@4.17.21"}
+						]
+					},
+					{
+						"name": "actions/checkout",
+						"SPDXID": "SPDXRef-actions-checkout",
+						"versionInfo": "v4",
+						"licenseDeclared": "MIT",
+						"externalRefs": [
+							{"referenceType": "purl", "referenceLocator": "pkg:github/actions/checkout@v4"}
+						]
+					},
+					{
+						"name": "ghcr.io/acme/runtime",
+						"SPDXID": "SPDXRef-container",
+						"versionInfo": "sha256:abc",
+						"licenseConcluded": "NOASSERTION",
+						"externalRefs": [
+							{"referenceType": "purl", "referenceLocator": "pkg:oci/runtime@sha256:abc"}
+						]
+					}
+				]
+			}
+		}`
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    req,
+		}, nil
+	})}
+
+	result, err := fetchGitHubDependencyGraph(context.Background(), "acme/project", nil, 0)
+	if err != nil {
+		t.Fatalf("fetchGitHubDependencyGraph unexpected error: %v", err)
+	}
+	if result.Repository != "acme/project" || result.PackageCount != 1 || len(result.Packages) != 1 {
+		t.Fatalf("supported package summary mismatch: %+v", result)
+	}
+	if result.Packages[0].Manager != "npm" || result.Packages[0].Name != "lodash" || result.Packages[0].License != "MIT" {
+		t.Fatalf("supported package mismatch: %+v", result.Packages[0])
+	}
+	if result.UnsupportedCount != 2 || len(result.UnsupportedPackages) != 2 {
+		t.Fatalf("unsupported package summary mismatch: %+v", result)
+	}
+	if result.UnsupportedPackages[0].Name != "actions/checkout" ||
+		result.UnsupportedPackages[0].PURL != "pkg:github/actions/checkout@v4" ||
+		result.UnsupportedPackages[0].License != "MIT" {
+		t.Fatalf("first unsupported package mismatch: %+v", result.UnsupportedPackages[0])
+	}
+	if result.UnsupportedPackages[1].Name != "ghcr.io/acme/runtime" ||
+		result.UnsupportedPackages[1].PURL != "pkg:oci/runtime@sha256:abc" {
+		t.Fatalf("second unsupported package mismatch: %+v", result.UnsupportedPackages[1])
+	}
+}
+
 func TestQueryBool(t *testing.T) {
 	req := &http.Request{URL: &url.URL{}}
 	if queryBool(req, "x", true) != true {
@@ -202,10 +397,122 @@ func TestFormatPackage(t *testing.T) {
 
 func TestDepsToDot(t *testing.T) {
 	deps := map[string]interface{}{"b": "1", "c": "2"}
-	got := depsToDot("a", deps)
-	expect := "digraph deps {\n    \"a\" -> \"b\"\n    \"a\" -> \"c\"\n}\n"
+	got := depsToDot("a", "0", deps, nil, nil, nil, nil)
+	expect := "digraph deps {\n" +
+		"    node [shape=box]\n" +
+		"    \"a\" [label=\"a\" style=\"filled\" fillcolor=\"#ffffff\" version=\"0\"]\n" +
+		"    \"b\" [label=\"b\\n1\" style=\"filled\" fillcolor=\"#ffffff\" version=\"1\"]\n" +
+		"    \"c\" [label=\"c\\n2\" style=\"filled\" fillcolor=\"#ffffff\" version=\"2\"]\n" +
+		"    \"a\" -> \"b\"\n" +
+		"    \"a\" -> \"c\"\n" +
+		"    subgraph cluster_legend {\n" +
+		"        label=\"OSV status\"\n" +
+		"        color=\"#cbd5e1\"\n" +
+		"        style=\"rounded\"\n" +
+		"        \"__legend_vulnerable\" [label=\"vulnerable\" style=\"filled\" fillcolor=\"#fecaca\"]\n" +
+		"        \"__legend_no_advisory\" [label=\"no advisory\" style=\"filled\" fillcolor=\"#bbf7d0\"]\n" +
+		"        \"__legend_unknown\" [label=\"unknown\" style=\"filled\" fillcolor=\"#fde68a\"]\n" +
+		"        \"__legend_not_checked\" [label=\"not checked\" style=\"filled\" fillcolor=\"#e5e7eb\"]\n" +
+		"    }\n" +
+		"}\n"
 	if got != expect {
 		t.Errorf("depsToDot output mismatch\n got:%s\n want:%s", got, expect)
+	}
+}
+
+func TestDepsToDotIncludesRootWhenEmpty(t *testing.T) {
+	got := depsToDot("root", "1.0.0", map[string]interface{}{}, nil, map[string]string{"root": "https://github.com/acme/root"}, nil, nil)
+	expect := "digraph deps {\n" +
+		"    node [shape=box]\n" +
+		"    \"root\" [label=\"root\" style=\"filled\" fillcolor=\"#ffffff\" version=\"1.0.0\" repository=\"https://github.com/acme/root\" URL=\"https://github.com/acme/root\"]\n" +
+		"    subgraph cluster_legend {\n" +
+		"        label=\"OSV status\"\n" +
+		"        color=\"#cbd5e1\"\n" +
+		"        style=\"rounded\"\n" +
+		"        \"__legend_vulnerable\" [label=\"vulnerable\" style=\"filled\" fillcolor=\"#fecaca\"]\n" +
+		"        \"__legend_no_advisory\" [label=\"no advisory\" style=\"filled\" fillcolor=\"#bbf7d0\"]\n" +
+		"        \"__legend_unknown\" [label=\"unknown\" style=\"filled\" fillcolor=\"#fde68a\"]\n" +
+		"        \"__legend_not_checked\" [label=\"not checked\" style=\"filled\" fillcolor=\"#e5e7eb\"]\n" +
+		"    }\n" +
+		"}\n"
+	if got != expect {
+		t.Errorf("depsToDot empty output mismatch\n got:%s\n want:%s", got, expect)
+	}
+}
+
+func TestDepsToDotUsesParents(t *testing.T) {
+	deps := map[string]interface{}{
+		"direct":         "1",
+		"shared":         "2",
+		"transitive":     "3",
+		`quoted"package`: "4",
+	}
+	parents := map[string][]string{
+		"direct":         {""},
+		"shared":         {"direct", "transitive"},
+		"transitive":     {"direct"},
+		`quoted"package`: {`parent\package`},
+	}
+	repos := map[string]string{
+		"direct":         "https://github.com/acme/direct",
+		`quoted"package`: `https://github.com/acme/quoted"package`,
+	}
+	got := depsToDot("root", "0", deps, parents, repos, nil, nil)
+	expect := "digraph deps {\n" +
+		"    node [shape=box]\n" +
+		"    \"root\" [label=\"root\" style=\"filled\" fillcolor=\"#ffffff\" version=\"0\"]\n" +
+		"    \"direct\" [label=\"direct\\n1\" style=\"filled\" fillcolor=\"#ffffff\" version=\"1\" repository=\"https://github.com/acme/direct\" URL=\"https://github.com/acme/direct\"]\n" +
+		"    \"quoted\\\"package\" [label=\"quoted\\\"package\\n4\" style=\"filled\" fillcolor=\"#ffffff\" version=\"4\" repository=\"https://github.com/acme/quoted\\\"package\" URL=\"https://github.com/acme/quoted\\\"package\"]\n" +
+		"    \"shared\" [label=\"shared\\n2\" style=\"filled\" fillcolor=\"#ffffff\" version=\"2\"]\n" +
+		"    \"transitive\" [label=\"transitive\\n3\" style=\"filled\" fillcolor=\"#ffffff\" version=\"3\"]\n" +
+		"    \"direct\" -> \"shared\"\n" +
+		"    \"direct\" -> \"transitive\"\n" +
+		"    \"parent\\\\package\" -> \"quoted\\\"package\"\n" +
+		"    \"root\" -> \"direct\"\n" +
+		"    \"transitive\" -> \"shared\"\n" +
+		"    subgraph cluster_legend {\n" +
+		"        label=\"OSV status\"\n" +
+		"        color=\"#cbd5e1\"\n" +
+		"        style=\"rounded\"\n" +
+		"        \"__legend_vulnerable\" [label=\"vulnerable\" style=\"filled\" fillcolor=\"#fecaca\"]\n" +
+		"        \"__legend_no_advisory\" [label=\"no advisory\" style=\"filled\" fillcolor=\"#bbf7d0\"]\n" +
+		"        \"__legend_unknown\" [label=\"unknown\" style=\"filled\" fillcolor=\"#fde68a\"]\n" +
+		"        \"__legend_not_checked\" [label=\"not checked\" style=\"filled\" fillcolor=\"#e5e7eb\"]\n" +
+		"    }\n" +
+		"}\n"
+	if got != expect {
+		t.Errorf("depsToDot parent output mismatch\n got:%s\n want:%s", got, expect)
+	}
+}
+
+func TestDepsToDotIncludesSecurityAttributes(t *testing.T) {
+	deps := map[string]interface{}{"dep": "1.2.3"}
+	statuses := map[string]vulnerabilityStatus{
+		"root": {Status: "no_advisory", Checked: true},
+		"dep":  {Status: "vulnerable", Checked: true, AdvisoryCount: 2, Error: "partial OSV result"},
+	}
+	scorecards := map[string]interface{}{
+		"root": map[string]interface{}{"score": 8.5},
+		"dep":  map[string]interface{}{"scorecard": map[string]interface{}{"score": 4}},
+	}
+	got := depsToDot("root", "1.0.0", deps, nil, nil, statuses, scorecards)
+	expect := "digraph deps {\n" +
+		"    node [shape=box]\n" +
+		"    \"root\" [label=\"root\" style=\"filled\" fillcolor=\"#bbf7d0\" version=\"1.0.0\" osv_status=\"no_advisory\" osv_checked=\"true\" advisory_count=\"0\" scorecard_score=\"8.5\"]\n" +
+		"    \"dep\" [label=\"dep\\n1.2.3\" style=\"filled\" fillcolor=\"#fecaca\" version=\"1.2.3\" osv_status=\"vulnerable\" osv_checked=\"true\" advisory_count=\"2\" osv_error=\"partial OSV result\" scorecard_score=\"4\"]\n" +
+		"    \"root\" -> \"dep\"\n" +
+		"    subgraph cluster_legend {\n" +
+		"        label=\"OSV status\"\n" +
+		"        color=\"#cbd5e1\"\n" +
+		"        style=\"rounded\"\n" +
+		"        \"__legend_vulnerable\" [label=\"vulnerable\" style=\"filled\" fillcolor=\"#fecaca\"]\n" +
+		"        \"__legend_no_advisory\" [label=\"no advisory\" style=\"filled\" fillcolor=\"#bbf7d0\"]\n" +
+		"        \"__legend_unknown\" [label=\"unknown\" style=\"filled\" fillcolor=\"#fde68a\"]\n" +
+		"        \"__legend_not_checked\" [label=\"not checked\" style=\"filled\" fillcolor=\"#e5e7eb\"]\n" +
+		"    }\n" +
+		"}\n"
+	if got != expect {
+		t.Errorf("depsToDot security attributes mismatch\n got:%s\n want:%s", got, expect)
 	}
 }
 
@@ -302,6 +609,10 @@ func TestCacheKey(t *testing.T) {
 	k2 := cacheKey("npm", "", "pkg", "1.0.0", true, false, false)
 	if k1 == k2 {
 		t.Errorf("cache key should differ for recursive queries")
+	}
+	k3 := graphCacheKey(k1)
+	if k1 == k3 {
+		t.Errorf("graph cache key should differ from JSON dependency query")
 	}
 	p1 := purlCacheKey("pkg:npm/pkg@1.0.0", false, false, false, false)
 	p2 := purlCacheKey("pkg:npm/pkg@1.0.0", true, false, false, false)
