@@ -314,18 +314,20 @@ expressions so legal review queues can be isolated quickly. The same filtered
 repository package view can also export CycloneDX JSON with GitHub license
 metadata, license-policy properties, OSV status properties, and resolved
 transitive components with dependency edges and path properties once a
-dependency chain has been built. The repository graph toolbar exports the
-filtered graph as GraphViz DOT, including resolved transitive edges,
-license-policy attributes, and OSV status attributes for architecture and
-compliance review. A copyable and downloadable Markdown audit brief summarizes
-active-view license review counts, OSV findings, and dependency-chain coverage
-for ticket or review handoff.
+dependency chain has been built. It can also export the active filtered view as
+SPDX 2.3 JSON with package license fields, policy comments, OSV comments, and
+dependency relationships for compliance systems that prefer SPDX handoff. The
+repository graph toolbar exports the filtered graph as GraphViz DOT, including
+resolved transitive edges, license-policy attributes, and OSV status attributes
+for architecture and compliance review. A copyable and downloadable Markdown
+audit brief summarizes active-view license review counts, OSV findings, and
+dependency-chain coverage for ticket or review handoff.
 Repository import views can be reopened or shared with `?repo=owner/name`
 links, and successful imports canonicalize the URL to the GitHub repository
 slug for review handoff. GitHub SBOM records with unsupported package URLs or
-ecosystems are retained as skipped dependencies with license and external
-reference metadata, so reviewers can filter, brief, and export them as CSV or
-JSON instead of only seeing an unsupported count.
+ecosystems are retained as skipped dependencies with license, license-policy,
+and external reference metadata, so reviewers can filter, brief, and export
+them as CSV or JSON instead of only seeing an unsupported count.
 
 Example:
 

@@ -5831,6 +5831,20 @@ function App() {
     return component;
   };
 
+  const spdxLicenseValue = (value) => {
+    const license = String(value || "").trim();
+    return license || "NOASSERTION";
+  };
+
+  const spdxIdValue = (value, fallback) => {
+    const raw = String(value || fallback || "Package").trim();
+    const cleaned = raw
+      .replace(/^SPDXRef-/i, "")
+      .replace(/[^A-Za-z0-9.-]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    return `SPDXRef-${cleaned || "Package"}`;
+  };
+
   const buildGithubRepoCycloneDxBom = () => {
     const serial =
       window.crypto && window.crypto.randomUUID
@@ -6004,6 +6018,154 @@ function App() {
     };
   };
 
+  const buildGithubRepoSpdxDocument = () => {
+    const generatedAt = new Date().toISOString();
+    const repositoryName = githubRepoResult?.repository || "repository";
+    const rootSpdxId = "SPDXRef-Repository";
+    const documentNamespace = `https://oss-deps-explorer.local/spdx/${githubRepoExportBaseName()}-${Date.now()}`;
+    const packageByKey = new Map();
+    const packageRecords = new Map();
+    const relationships = new Map();
+    const usedSpdxIds = new Set([rootSpdxId]);
+    const uniqueSpdxId = (pkg, fallback) => {
+      const preferred = spdxIdValue(pkg?.spdx_id, fallback);
+      let candidate = preferred;
+      let suffix = 2;
+      while (usedSpdxIds.has(candidate)) {
+        candidate = `${preferred}-${suffix}`;
+        suffix += 1;
+      }
+      usedSpdxIds.add(candidate);
+      return candidate;
+    };
+    const addRelationship = (from, relationshipType, to) => {
+      if (!from || !to || from === to) return;
+      const key = `${from}\u0000${relationshipType}\u0000${to}`;
+      relationships.set(key, {
+        spdxElementId: from,
+        relationshipType,
+        relatedSpdxElement: to,
+      });
+    };
+    const addPackage = (pkg, scope = "direct", extraComments = []) => {
+      const displayName = githubPackageLabel(pkg);
+      const packageKey =
+        githubRepoPackageBomRef(pkg) ||
+        githubRepoPackageIdentityKey(pkg) ||
+        githubRepoPackageKey(pkg) ||
+        displayName;
+      if (packageByKey.has(packageKey)) {
+        return packageByKey.get(packageKey);
+      }
+      const spdxId = uniqueSpdxId(pkg, packageKey);
+      const license = githubPackageLicense(pkg);
+      const policy = githubPackageLicensePolicy(pkg);
+      const record = githubRepoPackageVulnRecord(pkg);
+      const comments = [
+        `oss-deps-explorer scope: ${scope}`,
+        `license policy: ${policy.status} (${policy.label})`,
+        policy.detail,
+        `OSV status: ${record?.status || "not_checked"}`,
+        record?.risk ? `OSV risk: ${record.risk}` : "",
+        ...(Array.isArray(extraComments) ? extraComments : [extraComments]),
+      ].filter(Boolean);
+      const packageRecord = {
+        name: displayName,
+        SPDXID: spdxId,
+        versionInfo: String(pkg?.version || ""),
+        downloadLocation: "NOASSERTION",
+        filesAnalyzed: false,
+        licenseConcluded: spdxLicenseValue(pkg?.license_concluded || license),
+        licenseDeclared: spdxLicenseValue(pkg?.license_declared || license),
+        copyrightText: "NOASSERTION",
+        comment: comments.join("; "),
+      };
+      const purl = githubRepoPackageBomRef(pkg);
+      if (purl) {
+        packageRecord.externalRefs = [
+          {
+            referenceCategory: "PACKAGE-MANAGER",
+            referenceType: "purl",
+            referenceLocator: purl,
+          },
+        ];
+      }
+      packageByKey.set(packageKey, spdxId);
+      packageRecords.set(spdxId, packageRecord);
+      return spdxId;
+    };
+
+    packageRecords.set(rootSpdxId, {
+      name: repositoryName,
+      SPDXID: rootSpdxId,
+      downloadLocation: "NOASSERTION",
+      filesAnalyzed: false,
+      licenseConcluded: "NOASSERTION",
+      licenseDeclared: "NOASSERTION",
+      copyrightText: "NOASSERTION",
+      comment: `Repository import from ${githubRepoResult?.source || "GitHub dependency graph SBOM"}`,
+    });
+
+    filteredGithubRepoPackages.forEach((pkg) => {
+      const packageSpdxId = addPackage(pkg, "direct");
+      addRelationship(rootSpdxId, "DEPENDS_ON", packageSpdxId);
+    });
+
+    githubRepoTransitiveExportRecords.forEach((record) => {
+      const pathComments = (record.dependencyPaths || []).map(
+        (path) => `dependency path: ${path}`,
+      );
+      const depSpdxId = addPackage(record.pkg, "transitive", [
+        `source root: ${record.rootPackage}`,
+        ...pathComments,
+      ]);
+      const parents =
+        record.parentPackages && record.parentPackages.length > 0
+          ? record.parentPackages
+          : [record.rootPkg];
+      parents.forEach((parentPkg) => {
+        const parentIsRoot =
+          githubRepoPackageIdentityKey(parentPkg) ===
+          githubRepoPackageIdentityKey(record.rootPkg);
+        const parentSpdxId = addPackage(
+          parentPkg,
+          parentIsRoot ? "direct" : "transitive",
+          parentIsRoot ? [] : [`source root: ${record.rootPackage}`],
+        );
+        addRelationship(parentSpdxId, "DEPENDS_ON", depSpdxId);
+      });
+    });
+
+    return {
+      spdxVersion: "SPDX-2.3",
+      dataLicense: "CC0-1.0",
+      SPDXID: "SPDXRef-DOCUMENT",
+      name: `OSS Dependency Explorer repository import: ${repositoryName}`,
+      documentNamespace,
+      creationInfo: {
+        created: generatedAt,
+        creators: ["Tool: OSS Dependency Explorer"],
+      },
+      documentDescribes: [rootSpdxId],
+      packages: Array.from(packageRecords.values()).sort((a, b) =>
+        a.SPDXID.localeCompare(b.SPDXID),
+      ),
+      relationships: Array.from(relationships.values()).sort((a, b) =>
+        `${a.spdxElementId}:${a.relationshipType}:${a.relatedSpdxElement}`.localeCompare(
+          `${b.spdxElementId}:${b.relationshipType}:${b.relatedSpdxElement}`,
+        ),
+      ),
+      annotations: [
+        {
+          annotationDate: generatedAt,
+          annotationType: "OTHER",
+          annotator: "Tool: OSS Dependency Explorer",
+          comment: `Active view: ${githubRepoActiveFilterLabel()}; ${filteredGithubRepoPackages.length} supported packages; ${githubRepoTransitiveExportRecords.length} resolved transitive packages; ${filteredGithubRepoLicenseReviewCount} license review packages; ${filteredGithubRepoVulnerableCount} vulnerable packages.`,
+        },
+      ],
+    };
+  };
+
   const githubRepoExportBaseName = () =>
     String(githubRepoResult?.repository || "repository")
       .replace(/[^a-z0-9._-]+/gi, "-")
@@ -6041,18 +6203,24 @@ function App() {
   };
 
   const buildGithubRepoSkippedDependencyQueue = () => {
-    const skippedDependencies = filteredGithubRepoUnsupportedPackages.map((pkg) => ({
-      display: githubUnsupportedPackageLabel(pkg),
-      name: pkg.name || "",
-      version: pkg.version || "",
-      purl: pkg.purl || "",
-      spdx_id: pkg.spdx_id || "",
-      license: githubPackageLicense(pkg) || "",
-      license_concluded: pkg.license_concluded || "",
-      license_declared: pkg.license_declared || "",
-      external_refs: pkg.external_refs || [],
-      skipped_reason: "unsupported package URL or ecosystem",
-    }));
+    const skippedDependencies = filteredGithubRepoUnsupportedPackages.map((pkg) => {
+      const policy = githubPackageLicensePolicy(pkg);
+      return {
+        display: githubUnsupportedPackageLabel(pkg),
+        name: pkg.name || "",
+        version: pkg.version || "",
+        purl: pkg.purl || "",
+        spdx_id: pkg.spdx_id || "",
+        license: githubPackageLicense(pkg) || "",
+        license_concluded: pkg.license_concluded || "",
+        license_declared: pkg.license_declared || "",
+        license_policy: policy.status,
+        license_policy_label: policy.label,
+        license_policy_detail: policy.detail,
+        external_refs: pkg.external_refs || [],
+        skipped_reason: "unsupported package URL or ecosystem",
+      };
+    });
     return {
       schema: "oss-deps-explorer/skipped-dependency-queue/v1",
       repository: githubRepoResult?.repository || "",
@@ -6086,9 +6254,10 @@ function App() {
       } else {
         rows.forEach((pkg) => {
           const license = githubPackageLicense(pkg) || "Missing SPDX";
+          const policy = githubPackageLicensePolicy(pkg);
           const refs = (pkg.external_refs || []).slice(0, 2).join(", ");
           lines.push(
-            `- ${githubUnsupportedPackageLabel(pkg)}${pkg.version ? `@${pkg.version}` : ""} - ${license}${refs ? `; refs: ${refs}` : ""}`,
+            `- ${githubUnsupportedPackageLabel(pkg)}${pkg.version ? `@${pkg.version}` : ""} - ${license} (${policy.label})${refs ? `; refs: ${refs}` : ""}`,
           );
         });
         if (extra > 0) {
@@ -6246,6 +6415,15 @@ function App() {
     );
   };
 
+  const exportGithubRepoSpdx = () => {
+    if (!githubRepoResult || filteredGithubRepoPackages.length === 0) return;
+    downloadText(
+      `${githubRepoExportBaseName()}-spdx.json`,
+      "application/spdx+json",
+      JSON.stringify(buildGithubRepoSpdxDocument(), null, 2),
+    );
+  };
+
   const exportGithubRepoSkippedJson = () => {
     if (!githubRepoResult || filteredGithubRepoUnsupportedPackages.length === 0) {
       return;
@@ -6270,22 +6448,29 @@ function App() {
           "license",
           "license_concluded",
           "license_declared",
+          "license_policy",
+          "license_policy_detail",
           "spdx_id",
           "external_refs",
           "skipped_reason",
         ],
-        ...filteredGithubRepoUnsupportedPackages.map((pkg) => [
-          githubRepoResult.repository || "",
-          pkg.name || githubUnsupportedPackageLabel(pkg),
-          pkg.version || "",
-          pkg.purl || "",
-          githubPackageLicense(pkg),
-          pkg.license_concluded || "",
-          pkg.license_declared || "",
-          pkg.spdx_id || "",
-          (pkg.external_refs || []).join(";"),
-          "unsupported package URL or ecosystem",
-        ]),
+        ...filteredGithubRepoUnsupportedPackages.map((pkg) => {
+          const policy = githubPackageLicensePolicy(pkg);
+          return [
+            githubRepoResult.repository || "",
+            pkg.name || githubUnsupportedPackageLabel(pkg),
+            pkg.version || "",
+            pkg.purl || "",
+            githubPackageLicense(pkg),
+            pkg.license_concluded || "",
+            pkg.license_declared || "",
+            policy.status,
+            policy.detail,
+            pkg.spdx_id || "",
+            (pkg.external_refs || []).join(";"),
+            "unsupported package URL or ecosystem",
+          ];
+        }),
       ];
       downloadText(
         `${githubRepoExportBaseName()}-skipped-dependencies.csv`,
@@ -9384,6 +9569,22 @@ function App() {
                             },
                             githubRepoShowingSkipped ? "Export JSON" : "Export SBOM",
                           ),
+                          !githubRepoShowingSkipped &&
+                            e(
+                              "button",
+                              {
+                                type: "button",
+                                className: "repo-graph-action-button",
+                                onClick: exportGithubRepoSpdx,
+                                disabled: filteredGithubRepoPackages.length === 0,
+                                "aria-label": "Export SPDX JSON",
+                                title:
+                                  githubRepoTransitiveExportRecords.length > 0
+                                    ? `Export SPDX 2.3 JSON with direct packages, ${formatNumber(githubRepoTransitiveExportRecords.length)} resolved transitive packages, and dependency relationships`
+                                    : "Export the current imported package filter as SPDX 2.3 JSON with license policy and OSV comments",
+                              },
+                              "Export SPDX",
+                            ),
                           e(
                             "span",
                             { className: "github-package-list-count" },
