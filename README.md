@@ -307,16 +307,19 @@ SPDX SBOM includes `licenseConcluded` or `licenseDeclared`, with `license`
 preferring the concluded value and falling back to the declared value. The UI
 repository import view exposes license summary filters, license chips on
 packages, missing-license isolation, and filtered CSV inventory exports with
-license, license-policy, and OSV triage columns for compliance handoff. License
+license, license-policy, OSV triage, source-root, immediate-parent, and
+dependency-path columns for compliance handoff. License
 policy filters flag copyleft, missing, custom, and non-allowlisted SPDX
 expressions so legal review queues can be isolated quickly. The same filtered
 repository package view can also export CycloneDX JSON with GitHub license
-metadata, license-policy properties, and OSV status properties for SBOM
-workflows. The repository graph toolbar exports the filtered graph as GraphViz
-DOT, including resolved transitive edges, license-policy attributes, and OSV
-status attributes for architecture and compliance review. A copyable and
-downloadable Markdown audit brief summarizes active-view license review counts,
-OSV findings, and dependency-chain coverage for ticket or review handoff.
+metadata, license-policy properties, OSV status properties, and resolved
+transitive components with dependency edges and path properties once a
+dependency chain has been built. The repository graph toolbar exports the
+filtered graph as GraphViz DOT, including resolved transitive edges,
+license-policy attributes, and OSV status attributes for architecture and
+compliance review. A copyable and downloadable Markdown audit brief summarizes
+active-view license review counts, OSV findings, and dependency-chain coverage
+for ticket or review handoff.
 Repository import views can be reopened or shared with `?repo=owner/name`
 links, and successful imports canonicalize the URL to the GitHub repository
 slug for review handoff. GitHub SBOM records with unsupported package URLs or

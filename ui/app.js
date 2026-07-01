@@ -5335,7 +5335,7 @@ function App() {
         pkg?.name &&
         versionValue &&
         versionValue.toLowerCase() !== "latest" &&
-        !/[<>=*|,\s]/.test(versionValue),
+        !/[<>=*|,\s^~]/.test(versionValue),
     );
   };
   const githubRepoDependencyApiUrl = (pkg, recursive = true) => {
@@ -5364,6 +5364,67 @@ function App() {
       version: versionValue || "",
       display: packageName,
     };
+  };
+  const githubRepoPackageBomRef = (pkg) =>
+    pkg?.purl ||
+    packagePurl(
+      pkg?.manager,
+      githubPackageLabel(pkg),
+      pkg?.version || "",
+    );
+  const githubRepoPackageBriefLabel = (pkg) => {
+    const versionValue = pkg.version ? `@${pkg.version}` : "";
+    const managerLabel = pmDisplayNames[pkg.manager] || pkg.manager || "package";
+    return `${githubPackageLabel(pkg)}${versionValue} (${managerLabel})`;
+  };
+  const githubRepoDependencyPaths = (expansion, depName, rootPkg, limit = 8) => {
+    if (!expansion || !depName) return [];
+    const dependencies = expansion.dependencies || {};
+    const parents = expansion.parents || {};
+    const rootName = expansion.rootPackageName || "";
+    const rootLabel = githubRepoPackageBriefLabel(rootPkg);
+    const managerKey = expansion.manager || rootPkg?.manager || "";
+    const labelName = (name) => {
+      if (!name || name === rootName) return rootLabel;
+      return githubRepoPackageBriefLabel(
+        githubRepoPackageFromFormattedName(
+          managerKey,
+          name,
+          dependencies[name] || "",
+        ),
+      );
+    };
+    const pathLabels = new Set();
+    const walk = (name, chain, seen) => {
+      if (pathLabels.size >= limit) return;
+      const rawParents = parents[name];
+      const parentValues = (
+        Array.isArray(rawParents) ? rawParents : [rawParents || ""]
+      )
+        .filter((parentName, index, values) => values.indexOf(parentName) === index)
+        .sort((a, b) => String(a || "").localeCompare(String(b || "")));
+      const candidates = parentValues.length > 0 ? parentValues : [""];
+      candidates.forEach((parentName) => {
+        if (pathLabels.size >= limit) return;
+        if (
+          !parentName ||
+          parentName === rootName ||
+          dependencies[parentName] === undefined
+        ) {
+          pathLabels.add([rootLabel, ...chain.map(labelName)].join(" > "));
+          return;
+        }
+        if (seen.has(parentName)) {
+          pathLabels.add(
+            [rootLabel, ...[parentName, ...chain].map(labelName)].join(" > "),
+          );
+          return;
+        }
+        walk(parentName, [parentName, ...chain], new Set([...seen, parentName]));
+      });
+    };
+    walk(depName, [depName], new Set([depName]));
+    return Array.from(pathLabels);
   };
   const githubRepoTransitiveRootCandidates = filteredGithubRepoPackages.filter(
     (pkg) => githubRepoDependencyApiUrl(pkg),
@@ -5404,6 +5465,68 @@ function App() {
       { resolvedRoots: 0, failedRoots: 0, nodeIds: new Set() },
     );
   const githubRepoTransitiveNodeCount = githubRepoTransitiveSummary.nodeIds.size;
+  const githubRepoTransitiveExportRecords = filteredGithubRepoPackages.flatMap(
+    (rootPkg) => {
+      const rootKey = githubRepoPackageKey(rootPkg);
+      const expansion = rootKey ? githubRepoTransitiveDeps[rootKey] : null;
+      if (!expansion || expansion.failed) return [];
+      const dependencies = expansion.dependencies || {};
+      const parents = expansion.parents || {};
+      return Object.entries(dependencies)
+        .filter(([depName]) => depName && depName !== expansion.rootPackageName)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([depName, depVersion]) => {
+          const depPkg = githubRepoPackageFromFormattedName(
+            expansion.manager,
+            depName,
+            depVersion,
+          );
+          const parentValues = Array.isArray(parents[depName])
+            ? parents[depName]
+            : [parents[depName] || ""];
+          const parentPackages = parentValues.map((parentName) => {
+            if (
+              parentName &&
+              parentName !== expansion.rootPackageName &&
+              dependencies[parentName] !== undefined
+            ) {
+              return githubRepoPackageFromFormattedName(
+                expansion.manager,
+                parentName,
+                dependencies[parentName],
+              );
+            }
+            return rootPkg;
+          });
+          return {
+            pkg: depPkg,
+            rootPkg,
+            rootPackage: githubRepoPackageBriefLabel(rootPkg),
+            parentPackages,
+            dependencyPaths: githubRepoDependencyPaths(
+              expansion,
+              depName,
+              rootPkg,
+            ),
+          };
+        });
+    },
+  );
+  const githubRepoTransitiveExportRootCount = new Set(
+    githubRepoTransitiveExportRecords
+      .map(
+        (record) =>
+          githubRepoPackageIdentityKey(record.rootPkg) ||
+          githubRepoPackageKey(record.rootPkg),
+      )
+      .filter(Boolean),
+  ).size;
+  const githubRepoExportCoverageLabel =
+    githubRepoTransitiveExportRecords.length === 0
+      ? "Direct inventory"
+      : githubRepoProjectResolutionComplete
+        ? "Full chain export"
+        : "Partial chain export";
   const githubRepoGraphNodeCount =
     filteredGithubRepoPackages.length + githubRepoTransitiveNodeCount;
   const githubRepoTransitiveGraphSignature = Object.entries(githubRepoTransitiveDeps)
@@ -5644,9 +5767,13 @@ function App() {
       record.status === "vulnerable" &&
       (riskRank[record.risk] || 0) >= riskRank.high,
   ).length;
-  const githubRepoCycloneDxComponent = (pkg) => {
+  const githubRepoCycloneDxComponent = (
+    pkg,
+    scope = "direct",
+    extraProperties = [],
+  ) => {
     const displayName = githubPackageLabel(pkg);
-    const purl = pkg.purl || packagePurl(pkg.manager, displayName, pkg.version);
+    const purl = githubRepoPackageBomRef(pkg);
     const licensePolicy = githubPackageLicensePolicy(pkg);
     const component = {
       type: "library",
@@ -5658,6 +5785,10 @@ function App() {
         {
           name: "oss-deps-explorer:package-manager",
           value: pkg.manager || "",
+        },
+        {
+          name: "oss-deps-explorer:dependency-scope",
+          value: scope,
         },
         {
           name: "oss-deps-explorer:osv-status",
@@ -5673,6 +5804,7 @@ function App() {
         },
       ],
     };
+    component.properties.push(...extraProperties);
     if (pkg.namespace) component.group = pkg.namespace;
     const license = githubPackageLicense(pkg);
     if (license) {
@@ -5704,27 +5836,103 @@ function App() {
       window.crypto && window.crypto.randomUUID
         ? window.crypto.randomUUID()
         : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const components = filteredGithubRepoPackages.map(
-      githubRepoCycloneDxComponent,
+    const rootBomRef = `repository:${githubRepoResult?.repository || "repository"}`;
+    const componentMap = new Map();
+    const dependencyMap = new Map([[rootBomRef, new Set()]]);
+    const ensureDependencyRef = (ref) => {
+      if (!dependencyMap.has(ref)) dependencyMap.set(ref, new Set());
+      return dependencyMap.get(ref);
+    };
+    const mergeComponentProperties = (target, incoming) => {
+      const seen = new Set(
+        (target.properties || []).map((prop) => `${prop.name}\u0000${prop.value}`),
+      );
+      (incoming.properties || []).forEach((prop) => {
+        const key = `${prop.name}\u0000${prop.value}`;
+        if (seen.has(key)) return;
+        target.properties.push(prop);
+        seen.add(key);
+      });
+      if (!target.licenses && incoming.licenses) {
+        target.licenses = incoming.licenses;
+      }
+    };
+    const addComponent = (pkg, scope = "direct", extraProperties = []) => {
+      const component = githubRepoCycloneDxComponent(
+        pkg,
+        scope,
+        extraProperties,
+      );
+      const ref = component["bom-ref"];
+      if (componentMap.has(ref)) {
+        mergeComponentProperties(componentMap.get(ref), component);
+      } else {
+        componentMap.set(ref, component);
+      }
+      ensureDependencyRef(ref);
+      return ref;
+    };
+    const directRefs = filteredGithubRepoPackages.map((pkg) =>
+      addComponent(pkg, "direct"),
     );
-    const dependencies = components.map((component) => ({
-      ref: component["bom-ref"],
-      dependsOn: [],
-    }));
+    directRefs.forEach((ref) => ensureDependencyRef(rootBomRef).add(ref));
+    githubRepoTransitiveExportRecords.forEach((record) => {
+      const sourceRootProperty = {
+        name: "oss-deps-explorer:source-root",
+        value: record.rootPackage,
+      };
+      const dependencyPathProperties = (record.dependencyPaths || []).map(
+        (path) => ({
+          name: "oss-deps-explorer:dependency-path",
+          value: path,
+        }),
+      );
+      const depRef = addComponent(record.pkg, "transitive", [
+        sourceRootProperty,
+        ...dependencyPathProperties,
+      ]);
+      const parentPackages =
+        record.parentPackages && record.parentPackages.length > 0
+          ? record.parentPackages
+          : [record.rootPkg];
+      parentPackages.forEach((parentPkg) => {
+        const parentIsRoot =
+          githubRepoPackageIdentityKey(parentPkg) ===
+          githubRepoPackageIdentityKey(record.rootPkg);
+        const parentRef = addComponent(
+          parentPkg,
+          parentIsRoot ? "direct" : "transitive",
+          parentIsRoot ? [] : [sourceRootProperty],
+        );
+        ensureDependencyRef(parentRef).add(depRef);
+      });
+    });
+    const components = Array.from(componentMap.values()).sort((a, b) =>
+      a["bom-ref"].localeCompare(b["bom-ref"]),
+    );
+    const dependencies = Array.from(dependencyMap.entries())
+      .map(([ref, dependsOn]) => ({
+        ref,
+        dependsOn: Array.from(dependsOn).sort((a, b) => a.localeCompare(b)),
+      }))
+      .sort((a, b) => a.ref.localeCompare(b.ref));
     const vulnerabilities = [];
-    filteredGithubRepoPackages.forEach((pkg) => {
+    const vulnerabilityKeys = new Set();
+    const addVulnerabilitiesForPackage = (pkg, componentRef) => {
       const record = githubRepoPackageVulnRecord(pkg);
       if (!record || record.status !== "vulnerable") return;
-      const component = githubRepoCycloneDxComponent(pkg);
       (record.advisoryIds || []).forEach((id) => {
+        const key = `${id}\u0000${componentRef}`;
+        if (vulnerabilityKeys.has(key)) return;
+        vulnerabilityKeys.add(key);
         const vulnerability = {
-          "bom-ref": `vulnerability:${id}:${component["bom-ref"]}`,
+          "bom-ref": `vulnerability:${id}:${componentRef}`,
           id,
           source: {
             name: "OSV",
             url: `https://osv.dev/vulnerability/${encodeURIComponent(id)}`,
           },
-          affects: [{ ref: component["bom-ref"] }],
+          affects: [{ ref: componentRef }],
         };
         if (record.score > 0) {
           vulnerability.ratings = [
@@ -5738,6 +5946,14 @@ function App() {
         }
         vulnerabilities.push(vulnerability);
       });
+    };
+    filteredGithubRepoPackages.forEach((pkg) => {
+      const ref = githubRepoPackageBomRef(pkg);
+      addVulnerabilitiesForPackage(pkg, ref);
+    });
+    githubRepoTransitiveExportRecords.forEach((record) => {
+      const ref = githubRepoPackageBomRef(record.pkg);
+      addVulnerabilitiesForPackage(record.pkg, ref);
     });
     return {
       bomFormat: "CycloneDX",
@@ -5756,6 +5972,7 @@ function App() {
         },
         component: {
           type: "application",
+          "bom-ref": rootBomRef,
           name: githubRepoResult?.repository || "GitHub repository import",
         },
       },
@@ -5770,6 +5987,14 @@ function App() {
         {
           name: "oss-deps-explorer:filtered-package-count",
           value: String(filteredGithubRepoPackages.length),
+        },
+        {
+          name: "oss-deps-explorer:filtered-transitive-package-count",
+          value: String(githubRepoTransitiveExportRecords.length),
+        },
+        {
+          name: "oss-deps-explorer:filtered-resolved-root-count",
+          value: String(githubRepoFilteredResolvedRootCount),
         },
         {
           name: "oss-deps-explorer:total-package-count",
@@ -5841,12 +6066,6 @@ function App() {
       filtered_skipped_count: skippedDependencies.length,
       skipped_dependencies: skippedDependencies,
     };
-  };
-
-  const githubRepoPackageBriefLabel = (pkg) => {
-    const versionValue = pkg.version ? `@${pkg.version}` : "";
-    const managerLabel = pmDisplayNames[pkg.manager] || pkg.manager || "package";
-    return `${githubPackageLabel(pkg)}${versionValue} (${managerLabel})`;
   };
 
   const buildGithubRepoAuditBrief = () => {
@@ -6094,6 +6313,10 @@ function App() {
         "score",
         "advisory_count",
         "advisory_ids",
+        "dependency_scope",
+        "root_package",
+        "direct_parents",
+        "dependency_paths",
       ],
       ...filteredGithubRepoPackages.map((pkg) => {
         const record = githubRepoPackageVulnRecord(pkg);
@@ -6115,6 +6338,39 @@ function App() {
           record?.score ?? "",
           record?.advisoryCount ?? "",
           (record?.advisoryIds || []).join(";"),
+          "direct",
+          "",
+          "",
+          "",
+        ];
+      }),
+      ...githubRepoTransitiveExportRecords.map((record) => {
+        const pkg = record.pkg;
+        const vulnRecord = githubRepoPackageVulnRecord(pkg);
+        const licensePolicy = githubPackageLicensePolicy(pkg);
+        return [
+          githubRepoResult.repository || "",
+          pkg.manager || "",
+          pkg.namespace || "",
+          pkg.name || "",
+          pkg.version || "",
+          githubRepoPackageBomRef(pkg),
+          githubPackageLicense(pkg),
+          pkg.license_concluded || "",
+          pkg.license_declared || "",
+          licensePolicy.status,
+          licensePolicy.detail,
+          vulnRecord?.status || "not_checked",
+          vulnRecord?.risk || "",
+          vulnRecord?.score ?? "",
+          vulnRecord?.advisoryCount ?? "",
+          (vulnRecord?.advisoryIds || []).join(";"),
+          "transitive",
+          record.rootPackage,
+          (record.parentPackages || [])
+            .map(githubRepoPackageBriefLabel)
+            .join(";"),
+          (record.dependencyPaths || []).join(";"),
         ];
       }),
     ];
@@ -9099,7 +9355,9 @@ function App() {
                               title:
                                 githubRepoShowingSkipped
                                   ? "Export skipped GitHub SBOM records as CSV"
-                                  : "Export the current imported package filter as CSV with license and OSV columns",
+                                  : githubRepoTransitiveExportRecords.length > 0
+                                    ? `Export the current imported package filter plus ${formatNumber(githubRepoTransitiveExportRecords.length)} resolved transitive rows as CSV`
+                                    : "Export the current imported package filter as CSV with license and OSV columns",
                             },
                             "Export CSV",
                           ),
@@ -9120,7 +9378,9 @@ function App() {
                               title:
                                 githubRepoShowingSkipped
                                   ? "Export skipped GitHub SBOM records as JSON with license and external references"
-                                  : "Export the current imported package filter as CycloneDX JSON with license and OSV status properties",
+                                  : githubRepoTransitiveExportRecords.length > 0
+                                    ? `Export CycloneDX JSON with direct packages, ${formatNumber(githubRepoTransitiveExportRecords.length)} resolved transitive components, and dependency edges`
+                                    : "Export the current imported package filter as CycloneDX JSON with license and OSV status properties",
                             },
                             githubRepoShowingSkipped ? "Export JSON" : "Export SBOM",
                           ),
@@ -9413,6 +9673,55 @@ function App() {
                             )} transitive nodes resolved`,
                           githubRepoTransitiveError &&
                             e("span", null, githubRepoTransitiveError),
+                        ),
+                      !githubRepoShowingSkipped &&
+                        e(
+                          "div",
+                          {
+                            className: "github-repo-export-manifest",
+                            "aria-label": "Repository export contents",
+                          },
+                          e(
+                            "span",
+                            {
+                              className: `github-repo-export-scope${
+                                githubRepoTransitiveExportRecords.length > 0
+                                  ? " ready"
+                                  : ""
+                              }`,
+                            },
+                            githubRepoExportCoverageLabel,
+                          ),
+                          e(
+                            "span",
+                            null,
+                            `${formatNumber(filteredGithubRepoPackages.length)} direct rows`,
+                          ),
+                          e(
+                            "span",
+                            null,
+                            `${formatNumber(
+                              githubRepoTransitiveExportRecords.length,
+                            )} transitive rows`,
+                          ),
+                          githubRepoFilteredRootCount > 0 &&
+                            e(
+                              "span",
+                              null,
+                              `${formatNumber(
+                                githubRepoFilteredResolvedRootCount,
+                              )}/${formatNumber(
+                                githubRepoFilteredRootCount,
+                              )} visible roots`,
+                            ),
+                          githubRepoTransitiveExportRootCount > 0 &&
+                            e(
+                              "span",
+                              null,
+                              `${formatNumber(
+                                githubRepoTransitiveExportRootCount,
+                              )} export roots`,
+                            ),
                         ),
                       e("svg", {
                         ref: repoGraphRef,
