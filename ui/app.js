@@ -3897,9 +3897,21 @@ function App() {
       }
       return largeGraph ? 24 : compactGraph ? 15 : 20;
     };
+    // Pick the label side with hysteresis: the perpetual float jitter keeps
+    // nodes near the midline (always, for a single node) oscillating across
+    // it, so only flip sides once a node clearly crosses the center.
     const graphLabelAnchor = (d) => {
       if (compactGraph) return "middle";
-      return (d.x || width / 2) > width / 2 ? "end" : "start";
+      const x = d.x === undefined || d.x === null ? width / 2 : d.x;
+      const margin = 18;
+      if (d.labelAnchorSide === "end") {
+        if (x < width / 2 - margin) d.labelAnchorSide = "start";
+      } else if (d.labelAnchorSide === "start") {
+        if (x > width / 2 + margin) d.labelAnchorSide = "end";
+      } else {
+        d.labelAnchorSide = x > width / 2 ? "end" : "start";
+      }
+      return d.labelAnchorSide;
     };
     const graphLabelX = (d) => {
       if (compactGraph) return d.x;
