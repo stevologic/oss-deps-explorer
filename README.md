@@ -17,6 +17,8 @@ Optional features include:
 
 * Recursive dependency resolution with the `-recursive` flag.
 * Vulnerability lookups from [OSV.dev](https://osv.dev) via the `-vuln` flag.
+  Advisories that lack severity data are enriched by resolving their CVE/GHSA
+  aliases against OSV.
 * Repository health details from OpenSSF Scorecard with `-scorecard`.
 * Repository URLs cached alongside dependency data for faster Scorecard lookups.
 * GraphViz visual output when `-graph` is supplied or `graph=true` is passed for dependency lookup requests.
@@ -38,6 +40,27 @@ Deps.dev API base URLs are exposed via `/api/config`. Package name suggestions c
 | `composer` | namespace = vendor, name = package | Uses Packagist API |
 
 For npm, PyPI, Maven, and Cargo, deps.dev provides resolved dependency graph data. For Go, RubyGems, and NuGet, the service uses the current deps.dev requirements endpoint and returns direct requirements. Composer uses Packagist metadata and resolves common Composer version constraints on a best-effort basis for recursive lookups.
+
+### Web UI
+
+The bundled UI (served at `/` by the API binary, or standalone from the `ui`
+container on port 8081) offers three analysis modes:
+
+* **Package** – resolve direct and transitive dependencies with OSV
+  vulnerability triage, OpenSSF Scorecard data, repository metadata cards, an
+  interactive dependency graph, and JSON/CycloneDX/SPDX/GraphViz/CSV exports.
+* **CVE** – look up an advisory by CVE, GHSA, OSV, or PYSEC ID (with NVD
+  fallback for advisories OSV does not carry), see affected packages,
+  severity, references, and remediation guidance, and pivot straight into
+  package analysis.
+* **Repository** – import a GitHub repository's dependency graph SBOM for
+  license policy review, OSV triage, and filtered CSV/CycloneDX/SPDX/DOT
+  exports, including skipped (unsupported) dependencies.
+
+Every view is a shareable deep link — `?manager=npm&name=express&version=4.18.2`,
+`?cve=CVE-2024-3094`, or `?repo=owner/name` — and browser back/forward
+navigates between previously viewed analyses. Light and dark themes follow the
+system preference and can be toggled in the header.
 
 ## Configuration
 
@@ -307,19 +330,27 @@ SPDX SBOM includes `licenseConcluded` or `licenseDeclared`, with `license`
 preferring the concluded value and falling back to the declared value. The UI
 repository import view exposes license summary filters, license chips on
 packages, missing-license isolation, and filtered CSV inventory exports with
-license, license-policy, and OSV triage columns for compliance handoff. License
+license, license-policy, OSV triage, source-root, immediate-parent, and
+dependency-path columns for compliance handoff. License
 policy filters flag copyleft, missing, custom, and non-allowlisted SPDX
 expressions so legal review queues can be isolated quickly. The same filtered
 repository package view can also export CycloneDX JSON with GitHub license
-metadata, license-policy properties, and OSV status properties for SBOM
-workflows. The repository graph toolbar exports the filtered graph as GraphViz
-DOT, including resolved transitive edges, license-policy attributes, and OSV
-status attributes for architecture and compliance review. A copyable and
-downloadable Markdown audit brief summarizes active-view license review counts,
-OSV findings, and dependency-chain coverage for ticket or review handoff.
+metadata, license-policy properties, OSV status properties, and resolved
+transitive components with dependency edges and path properties once a
+dependency chain has been built. It can also export the active filtered view as
+SPDX 2.3 JSON with package license fields, policy comments, OSV comments, and
+dependency relationships for compliance systems that prefer SPDX handoff. The
+repository graph toolbar exports the filtered graph as GraphViz DOT, including
+resolved transitive edges, license-policy attributes, and OSV status attributes
+for architecture and compliance review. A copyable and downloadable Markdown
+audit brief summarizes active-view license review counts, OSV findings, and
+dependency-chain coverage for ticket or review handoff.
 Repository import views can be reopened or shared with `?repo=owner/name`
 links, and successful imports canonicalize the URL to the GitHub repository
-slug for review handoff.
+slug for review handoff. GitHub SBOM records with unsupported package URLs or
+ecosystems are retained as skipped dependencies with license, license-policy,
+and external reference metadata, so reviewers can filter, brief, and export
+them as CSV or JSON instead of only seeing an unsupported count.
 
 Example:
 

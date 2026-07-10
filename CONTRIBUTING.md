@@ -10,9 +10,11 @@ Thank you for taking the time to contribute! This project welcomes both issues a
 
 ## Pull Requests
 
-1. Fork the repository and create your feature branch off of `main`:
+1. Fork the repository and create your feature branch off of `development`
+   (day-to-day integration happens there; `development` is merged to `main`
+   via pull request):
    ```bash
-   git checkout -b feature/my-change
+   git checkout -b feature/my-change development
    ```
 2. Follow the coding standards described below.
 3. Commit your changes with a meaningful commit message.
@@ -23,6 +25,14 @@ Thank you for taking the time to contribute! This project welcomes both issues a
 * All Go code should be formatted with `go fmt`.
 * Keep functions small and focused.
 * Add unit tests where possible.
+
+### Running Tests
+
+```bash
+go vet ./...
+go test ./...
+node --test "ui/**/*.test.mjs"   # UI export/builder tests (Node 22+)
+```
 
 ### Branch Naming
 
