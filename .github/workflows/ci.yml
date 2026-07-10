@@ -38,11 +38,23 @@ jobs:
 
       - name: Lint
         run: |
-          gofmt -l $(find . -name '*.go' -not -path '*/vendor/*')
+          unformatted=$(gofmt -l $(find . -name '*.go' -not -path '*/vendor/*'))
+          if [ -n "$unformatted" ]; then
+            echo "gofmt required for:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
           go vet ./...
 
       - name: Test
         run: go test ./...
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: UI tests
+        run: node --test "ui/**/*.test.mjs"
 
       - name: Build Docker image
         run: docker build -t $IMAGE_NAME:${{ github.sha }} .

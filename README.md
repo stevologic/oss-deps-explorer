@@ -17,6 +17,8 @@ Optional features include:
 
 * Recursive dependency resolution with the `-recursive` flag.
 * Vulnerability lookups from [OSV.dev](https://osv.dev) via the `-vuln` flag.
+  Advisories that lack severity data are enriched by resolving their CVE/GHSA
+  aliases against OSV.
 * Repository health details from OpenSSF Scorecard with `-scorecard`.
 * Repository URLs cached alongside dependency data for faster Scorecard lookups.
 * GraphViz visual output when `-graph` is supplied or `graph=true` is passed for dependency lookup requests.
@@ -38,6 +40,27 @@ Deps.dev API base URLs are exposed via `/api/config`. Package name suggestions c
 | `composer` | namespace = vendor, name = package | Uses Packagist API |
 
 For npm, PyPI, Maven, and Cargo, deps.dev provides resolved dependency graph data. For Go, RubyGems, and NuGet, the service uses the current deps.dev requirements endpoint and returns direct requirements. Composer uses Packagist metadata and resolves common Composer version constraints on a best-effort basis for recursive lookups.
+
+### Web UI
+
+The bundled UI (served at `/` by the API binary, or standalone from the `ui`
+container on port 8081) offers three analysis modes:
+
+* **Package** – resolve direct and transitive dependencies with OSV
+  vulnerability triage, OpenSSF Scorecard data, repository metadata cards, an
+  interactive dependency graph, and JSON/CycloneDX/SPDX/GraphViz/CSV exports.
+* **CVE** – look up an advisory by CVE, GHSA, OSV, or PYSEC ID (with NVD
+  fallback for advisories OSV does not carry), see affected packages,
+  severity, references, and remediation guidance, and pivot straight into
+  package analysis.
+* **Repository** – import a GitHub repository's dependency graph SBOM for
+  license policy review, OSV triage, and filtered CSV/CycloneDX/SPDX/DOT
+  exports, including skipped (unsupported) dependencies.
+
+Every view is a shareable deep link — `?manager=npm&name=express&version=4.18.2`,
+`?cve=CVE-2024-3094`, or `?repo=owner/name` — and browser back/forward
+navigates between previously viewed analyses. Light and dark themes follow the
+system preference and can be toggled in the header.
 
 ## Configuration
 
