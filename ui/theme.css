@@ -2407,6 +2407,74 @@ li.transitive {
   line-height: 1.25;
 }
 
+button.security-stat-button {
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+button.security-stat-button:hover,
+button.security-stat-button:focus-visible {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 1px var(--primary-color) inset;
+}
+
+.security-stat-active {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 1px var(--primary-color) inset;
+}
+
+.security-stat-active .security-stat-detail {
+  color: var(--primary-color);
+  font-weight: 700;
+}
+
+.osv-legend {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-left: auto;
+  color: var(--neutral-color);
+  font-size: 0.72rem;
+}
+
+.osv-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.osv-legend-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.osv-legend-dot-vulnerable {
+  background: var(--error-color);
+}
+
+.osv-legend-dot-clean {
+  background: #999;
+}
+
+.osv-legend-dot-unknown {
+  background: transparent;
+  border: 2px solid var(--unknown-color);
+  width: 7px;
+  height: 7px;
+}
+
+.finding-more {
+  margin: -4px 0 0;
+  color: var(--neutral-color);
+  font-size: 0.75rem;
+}
+
 .security-stat-clean {
   border-color: rgba(22, 138, 86, 0.22);
 }
@@ -2491,6 +2559,7 @@ li.transitive {
 .triage-filter-shell {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   min-width: 0;
 }
