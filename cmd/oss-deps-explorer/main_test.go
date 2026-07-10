@@ -624,3 +624,31 @@ func TestCacheKey(t *testing.T) {
 		t.Errorf("purl cache key should differ for graph queries")
 	}
 }
+
+func TestAliasIDFromURL(t *testing.T) {
+	cases := map[string]string{
+		"https://nvd.nist.gov/vuln/detail/CVE-2024-12345":    "CVE-2024-12345",
+		"https://github.com/advisories/GHSA-vvpx-j8f3-3w6h":  "GHSA-vvpx-j8f3-3w6h",
+		"https://github.com/advisories/GHSA-vvpx-j8f3-3w6h/": "GHSA-vvpx-j8f3-3w6h",
+		"https://example.com/blog/some-post":                 "",
+		"https://example.com/CVE-2024":                       "",
+		"https://osv.dev/list?q=CVE-2024-12345":              "",
+	}
+	for in, want := range cases {
+		if got := aliasIDFromURL(in); got != want {
+			t.Errorf("aliasIDFromURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestVulnHasSeverity(t *testing.T) {
+	if vulnHasSeverity(map[string]interface{}{}) {
+		t.Errorf("empty vuln should have no severity")
+	}
+	if vulnHasSeverity(map[string]interface{}{"severity": []interface{}{}}) {
+		t.Errorf("empty severity array should count as missing")
+	}
+	if !vulnHasSeverity(map[string]interface{}{"severity": []interface{}{map[string]interface{}{"type": "CVSS_V3", "score": "CVSS:3.1/..."}}}) {
+		t.Errorf("populated severity array should count as present")
+	}
+}

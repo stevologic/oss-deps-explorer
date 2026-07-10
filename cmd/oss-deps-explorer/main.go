@@ -480,10 +480,126 @@ func purlCacheKey(purl string, recursive, vuln, score, graph bool) string {
 	return key
 }
 
+// osvAliasIDPattern matches advisory identifiers (CVE, GHSA) that can be
+// resolved against the OSV vulns endpoint for severity enrichment.
+var osvAliasIDPattern = regexp.MustCompile(`^(?:CVE-\d{4}-\d{4,}|GHSA(?:-[23456789cfghjmpqrvwx]{4}){3})$`)
+
+// aliasIDFromURL extracts a CVE or GHSA identifier from a reference URL.
+func aliasIDFromURL(u string) string {
+	trimmed := strings.TrimRight(u, "/")
+	if i := strings.LastIndex(trimmed, "/"); i >= 0 && i < len(trimmed)-1 {
+		if id := trimmed[i+1:]; osvAliasIDPattern.MatchString(id) {
+			return id
+		}
+	}
+	return ""
+}
+
+// fetchVulnByID retrieves a vulnerability entry from OSV by advisory ID.
+func fetchVulnByID(ctx context.Context, id string, cache *redisCache, ttl time.Duration) (map[string]interface{}, error) {
+	var key string
+	if cache != nil {
+		key = "osv:id:" + id
+		if val, ok := cache.get(ctx, key); ok {
+			var cached map[string]interface{}
+			if json.Unmarshal([]byte(val), &cached) == nil {
+				return cached, nil
+			}
+		}
+	}
+	url := fmt.Sprintf("https://api.osv.dev/v1/vulns/%s", id)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("osv.dev returned status %d", resp.StatusCode)
+	}
+	var out map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	if cache != nil {
+		if data, err := json.Marshal(out); err == nil {
+			cache.set(ctx, key, data, ttl)
+		}
+	}
+	return out, nil
+}
+
+func vulnHasSeverity(v map[string]interface{}) bool {
+	switch sev := v["severity"].(type) {
+	case []interface{}:
+		return len(sev) > 0
+	case map[string]interface{}:
+		return len(sev) > 0
+	}
+	return false
+}
+
+// enrichVulnSeverities fills in missing severity data by resolving CVE/GHSA
+// aliases against OSV, since some advisories only carry severity on an alias.
+func enrichVulnSeverities(ctx context.Context, vulns []map[string]interface{}, cache *redisCache, ttl time.Duration) {
+	const maxAliasLookupsPerVuln = 3
+	for _, v := range vulns {
+		if vulnHasSeverity(v) {
+			continue
+		}
+		var aliases []string
+		seen := map[string]struct{}{}
+		add := func(id string) {
+			if id == "" || !osvAliasIDPattern.MatchString(id) {
+				return
+			}
+			if _, dup := seen[id]; dup {
+				return
+			}
+			seen[id] = struct{}{}
+			aliases = append(aliases, id)
+		}
+		if a, ok := v["aliases"].([]interface{}); ok {
+			for _, idv := range a {
+				if s, ok := idv.(string); ok {
+					add(s)
+				}
+			}
+		}
+		if refs, ok := v["references"].([]interface{}); ok {
+			for _, rv := range refs {
+				if m, ok := rv.(map[string]interface{}); ok {
+					if u, ok := m["url"].(string); ok {
+						add(aliasIDFromURL(u))
+					}
+				}
+			}
+		}
+		lookups := 0
+		for _, id := range aliases {
+			if lookups >= maxAliasLookupsPerVuln {
+				break
+			}
+			lookups++
+			aliasVuln, err := fetchVulnByID(ctx, id, cache, ttl)
+			if err != nil {
+				continue
+			}
+			if sev, ok := aliasVuln["severity"].([]interface{}); ok && len(sev) > 0 {
+				v["severity"] = sev
+				break
+			}
+		}
+	}
+}
+
 func fetchVulns(ctx context.Context, ecosystem, name, version string, cache *redisCache, ttl time.Duration) ([]map[string]interface{}, error) {
 	var key string
 	if cache != nil {
-		key = fmt.Sprintf("osv:%s:%s@%s", ecosystem, name, version)
+		key = fmt.Sprintf("osv:sev:%s:%s@%s", ecosystem, name, version)
 		if val, ok := cache.get(ctx, key); ok {
 			var cached []map[string]interface{}
 			if json.Unmarshal([]byte(val), &cached) == nil {
@@ -518,6 +634,7 @@ func fetchVulns(ctx context.Context, ecosystem, name, version string, cache *red
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, err
 	}
+	enrichVulnSeverities(ctx, out.Vulns, cache, ttl)
 	if cache != nil {
 		if data, err := json.Marshal(out.Vulns); err == nil {
 			cache.set(ctx, key, data, ttl)
