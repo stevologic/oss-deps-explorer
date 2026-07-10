@@ -2063,28 +2063,45 @@ function App() {
     return () => document.removeEventListener("keydown", closeOnEscape);
   }, [showMcpInfo]);
 
-  const updatePackageDeepLink = React.useCallback((details) => {
-    if (!details || !details.name) return "";
-    const url = buildPackageDeepLink(details);
-    window.history.replaceState({ package: details }, "", url);
+  // Push a history entry when the view URL changes so browser back/forward
+  // pivots between analyses; replace in place when the URL is unchanged.
+  const syncHistoryUrl = React.useCallback((state, url) => {
+    if (url === window.location.href) {
+      window.history.replaceState(state, "", url);
+    } else {
+      window.history.pushState(state, "", url);
+    }
     return url;
   }, []);
 
-  const updateCveDeepLink = React.useCallback((id) => {
-    const normalized = extractAdvisoryId(id);
-    if (!normalized) return "";
-    const url = buildCveDeepLink(normalized);
-    window.history.replaceState({ cve: normalized }, "", url);
-    return url;
-  }, []);
+  const updatePackageDeepLink = React.useCallback(
+    (details) => {
+      if (!details || !details.name) return "";
+      return syncHistoryUrl({ package: details }, buildPackageDeepLink(details));
+    },
+    [syncHistoryUrl],
+  );
 
-  const updateGithubRepoDeepLink = React.useCallback((repo) => {
-    const normalized = String(repo || "").trim();
-    if (!normalized) return "";
-    const url = buildGithubRepoDeepLink(normalized);
-    window.history.replaceState({ repository: normalized }, "", url);
-    return url;
-  }, []);
+  const updateCveDeepLink = React.useCallback(
+    (id) => {
+      const normalized = extractAdvisoryId(id);
+      if (!normalized) return "";
+      return syncHistoryUrl({ cve: normalized }, buildCveDeepLink(normalized));
+    },
+    [syncHistoryUrl],
+  );
+
+  const updateGithubRepoDeepLink = React.useCallback(
+    (repo) => {
+      const normalized = String(repo || "").trim();
+      if (!normalized) return "";
+      return syncHistoryUrl(
+        { repository: normalized },
+        buildGithubRepoDeepLink(normalized),
+      );
+    },
+    [syncHistoryUrl],
+  );
 
   const copyTextToClipboard = async (text) => {
     const copyWithSelection = (value) => {
@@ -3640,7 +3657,10 @@ function App() {
     setLoading(false);
     setStatusMessages([]);
     setStatus("");
-    window.history.replaceState({}, "", window.location.pathname);
+    const bareUrl = new URL(window.location.href);
+    bareUrl.search = "";
+    bareUrl.hash = "";
+    syncHistoryUrl({}, bareUrl.toString());
   };
 
   const buildGraph = (
@@ -4450,6 +4470,55 @@ function App() {
       return h.slice(0, -1);
     });
   };
+
+  // Keep the latest flow closures available to the mount-scoped popstate
+  // listener without re-registering it every render.
+  const historyNavRef = React.useRef(null);
+  historyNavRef.current = { fetchDeps, fetchCve, importGithubRepoDependencies, clearForm };
+
+  React.useEffect(() => {
+    const onPopState = () => {
+      const flows = historyNavRef.current;
+      if (!flows) return;
+      const repoLink = parseGithubRepoDeepLink();
+      if (repoLink) {
+        setSearchMode("repository");
+        setGithubRepoUrl(repoLink.repo);
+        flows.importGithubRepoDependencies(null, repoLink.repo, {
+          updateUrl: false,
+        });
+        return;
+      }
+      const cveLink = parseCveDeepLink();
+      if (cveLink) {
+        setSearchMode("cve");
+        setCveQuery(cveLink.id);
+        flows.fetchCve(null, cveLink.id, { updateUrl: false });
+        return;
+      }
+      const pkgLink = parsePackageDeepLink();
+      if (pkgLink) {
+        setSearchMode("package");
+        setManager(pkgLink.manager);
+        setNamespace(pkgLink.namespace || "");
+        setName(pkgLink.name);
+        setVersion(pkgLink.version || "");
+        flows.fetchDeps(
+          null,
+          pkgLink.version || null,
+          pkgLink.namespace || "",
+          pkgLink.name,
+          pkgLink.manager,
+          false,
+          { updateUrl: false },
+        );
+        return;
+      }
+      flows.clearForm();
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
   const depLists = (() => {
     if (!showPackageResults) return null;
