@@ -2208,8 +2208,8 @@ li.transitive {
 
 .security-overview-header {
   display: grid;
-  grid-template-columns: minmax(170px, 0.9fr) minmax(230px, 1.15fr) auto;
-  align-items: stretch;
+  grid-template-columns: auto minmax(230px, 1fr) auto;
+  align-items: center;
   gap: 12px;
 }
 

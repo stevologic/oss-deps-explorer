@@ -3158,6 +3158,7 @@ function App() {
     setConsoleLines([]);
     setShowConsole(false);
     setVulnerabilityStatus({});
+    setDependencyListFilter("all");
 
     setCacheStatus("");
 
@@ -4706,6 +4707,8 @@ function App() {
                   label: "No known OSV risk",
                   detail: `${analysis.totals.cleanPackages} packages checked clean.`,
                 };
+      // Always show the two headline numbers; secondary tiles only appear
+      // when they carry a nonzero count.
       const landscape = [
         {
           key: "vulnerable",
@@ -4715,19 +4718,19 @@ function App() {
           tone: hasFindings ? "danger" : "clean",
           filterKey: "vulnerable",
         },
-        {
+        highCritical > 0 && {
           key: "priority",
           value: highCritical,
           label: "High / critical",
           icon: "icons/warning.svg",
-          tone: highCritical > 0 ? "danger" : "muted",
+          tone: "danger",
         },
-        {
+        analysis.totals.transitiveFindings > 0 && {
           key: "transitive",
           value: analysis.totals.transitiveFindings,
           label: "Transitive findings",
           icon: "icons/transitive.svg",
-          tone: analysis.totals.transitiveFindings > 0 ? "review" : "muted",
+          tone: "review",
         },
         {
           key: "clean",
@@ -4736,103 +4739,15 @@ function App() {
           icon: "icons/success.svg",
           tone: "clean",
         },
-        {
+        hasUnresolved && {
           key: "unresolved",
           value: analysis.totals.unresolvedPackages,
           label: "OSV gaps",
           icon: "icons/cache.svg",
-          tone: hasUnresolved ? "unknown" : "muted",
+          tone: "unknown",
           filterKey: "unknown",
         },
-      ];
-      const nextSteps = hasFindings
-        ? [
-            {
-              key: "patch",
-              tone: highCritical > 0 ? "danger" : "review",
-              icon: highCritical > 0 ? "icons/error.svg" : "icons/warning.svg",
-              label: highCritical > 0 ? "Patch priority packages" : "Review advisories",
-              detail:
-                highCritical > 0
-                  ? "Start with high and critical packages before lower severity work."
-                  : "Inspect affected versions and decide whether a version bump is needed.",
-            },
-            {
-              key: "paths",
-              tone: analysis.totals.transitiveFindings > 0 ? "review" : "muted",
-              icon: "icons/transitive.svg",
-              label:
-                analysis.totals.transitiveFindings > 0
-                  ? "Trace transitive paths"
-                  : "Check direct impact",
-              detail:
-                analysis.totals.transitiveFindings > 0
-                  ? "Use the tree filters to see which parent packages bring risk in."
-                  : "The risky packages are direct or root dependencies.",
-            },
-            {
-              key: "evidence",
-              tone: "clean",
-              icon: "icons/checks.svg",
-              label: "Export evidence",
-              detail: "Download SBOM or CSV for tracking and review.",
-            },
-          ]
-        : hasUnresolved
-          ? [
-              {
-                key: "retry",
-                tone: "unknown",
-                icon: "icons/cache.svg",
-                label: "Resolve lookup gaps",
-                detail: "Filter OSV gaps and rerun analysis for packages without a result.",
-              },
-              {
-                key: "monitor",
-                tone: "clean",
-                icon: "icons/checks.svg",
-                label: "Keep the clean set",
-                detail: "Export JSON or SBOM once unresolved packages are cleared.",
-              },
-            ]
-          : [
-              {
-                key: "clean",
-                tone: "clean",
-                icon: "icons/success.svg",
-                label: includeVuln ? "Clean OSV scan" : "Risk not classified",
-                detail: includeVuln
-                  ? "No OSV advisories were returned for this dependency set."
-                  : "OSV vulnerability checks were disabled for this run.",
-              },
-              {
-                key: "evidence",
-                tone: "muted",
-                icon: "icons/checks.svg",
-                label: "Keep evidence",
-                detail: "Download JSON or SBOM for audit records.",
-              },
-            ];
-      const filterOptions = [
-        {
-          key: "all",
-          label: "All dependencies",
-          count: analysis.totals.checkedPackages,
-          disabled: false,
-        },
-        {
-          key: "vulnerable",
-          label: "Vulnerable",
-          count: analysis.totals.findings,
-          disabled: !includeVuln || analysis.findings.length === 0,
-        },
-        {
-          key: "unknown",
-          label: "Needs OSV check",
-          count: analysis.totals.unresolvedPackages,
-          disabled: !includeVuln || analysis.totals.unresolvedPackages === 0,
-        },
-      ];
+      ].filter(Boolean);
       const exportButton = (format, label, options = {}) =>
         e(
           "button",
@@ -4856,13 +4771,6 @@ function App() {
             "div",
             { className: "security-title-block" },
             e("h3", null, "Security Triage"),
-            e(
-              "p",
-              { className: "triage-summary-line" },
-              includeVuln
-                ? `${analysis.totals.checkedPackages} packages tracked, ${analysis.totals.cleanPackages} clean, ${analysis.totals.unresolvedPackages} OSV gaps`
-                : `${analysis.totals.checkedPackages} packages tracked, OSV not checked`,
-            ),
           ),
           e(
             "div",
@@ -5000,53 +4908,18 @@ function App() {
             { className: "finding-more" },
             `${analysis.findings.length - 8} more vulnerable packages - use the Vulnerable filter to see all of them in the dependency lists.`,
           ),
-        e(
-          "div",
-          { className: "triage-next-steps" },
-          nextSteps.map((step) =>
-            e(
-              "div",
-              {
-                key: step.key,
-                className: `triage-step triage-step-${step.tone}`,
-              },
-              e("img", { src: step.icon, alt: "", "aria-hidden": "true" }),
-              e(
-                "span",
-                null,
-                e("strong", null, step.label),
-                e("span", null, step.detail),
-              ),
-            ),
-          ),
-        ),
-        e(
-          "div",
-          { className: "triage-filter-shell" },
-          e(
-            "span",
-            { className: "triage-filter-label" },
-            "Show in dependency lists",
-          ),
+        includeVuln &&
           e(
             "div",
-            { className: "dependency-filter-row" },
-            filterOptions.map((option) =>
+            { className: "triage-filter-shell" },
+            dependencyListFilter !== "all" &&
               e(
-                "button",
-                {
-                  key: option.key,
-                  type: "button",
-                  className: dependencyListFilter === option.key ? "active" : "",
-                  onClick: () => setDependencyListFilter(option.key),
-                  disabled: option.disabled,
-                },
-                e("span", null, option.label),
-                e("span", { className: "filter-count" }, option.count),
+                "span",
+                { className: "triage-filter-label" },
+                dependencyListFilter === "vulnerable"
+                  ? "Lists filtered to vulnerable packages"
+                  : "Lists filtered to unresolved OSV lookups",
               ),
-            ),
-          ),
-          includeVuln &&
             e(
               "div",
               { className: "osv-legend", "aria-label": "Graph color legend" },
@@ -5078,7 +4951,7 @@ function App() {
                 "needs OSV lookup",
               ),
             ),
-        ),
+          ),
         !includeVuln &&
           e(
             "div",
