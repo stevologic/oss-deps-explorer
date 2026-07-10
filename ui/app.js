@@ -2063,6 +2063,14 @@ function App() {
     return () => document.removeEventListener("keydown", closeOnEscape);
   }, [showMcpInfo]);
 
+  // Keep the tab/history-entry title in sync with the active view so
+  // back/forward menus and shared links are identifiable.
+  const setViewTitle = React.useCallback((label) => {
+    document.title = label
+      ? `${label} · OSS Dependency Explorer`
+      : "OSS Dependency Explorer";
+  }, []);
+
   // Push a history entry when the view URL changes so browser back/forward
   // pivots between analyses; replace in place when the URL is unchanged.
   const syncHistoryUrl = React.useCallback((state, url) => {
@@ -2931,6 +2939,7 @@ function App() {
           if (nvdData) {
             setCveResult(nvdData);
             if (options.updateUrl !== false) updateCveDeepLink(nvdData.id || id);
+            setViewTitle(nvdData.id || id);
             return;
           }
           throw new Error(`${id} was not found in OSV or NVD.`);
@@ -2943,6 +2952,7 @@ function App() {
           if (nvdData) {
             setCveResult(nvdData);
             if (options.updateUrl !== false) updateCveDeepLink(nvdData.id || id);
+            setViewTitle(nvdData.id || id);
             return;
           }
         }
@@ -2966,6 +2976,7 @@ function App() {
       if (options.updateUrl !== false) {
         updateCveDeepLink(data.id || id);
       }
+      setViewTitle(data.id || id);
     } catch (err) {
       const message =
         err && err.message ? err.message : "Unable to look up that advisory.";
@@ -3371,6 +3382,12 @@ function App() {
           version: rootVersion,
         });
       }
+      const titleName = nsVal
+        ? mgrVal === "maven"
+          ? `${nsVal}:${rootName}`
+          : `${nsVal}/${rootName}`
+        : rootName;
+      setViewTitle(`${titleName}@${rootVersion} · ${mgrVal}`);
 
       // graph will be built after results are displayed
 
@@ -3444,6 +3461,7 @@ function App() {
       if (options.updateUrl !== false) {
         updateGithubRepoDeepLink(data.repository || repo);
       }
+      setViewTitle(`${data.repository || repo} · repository`);
       if (!data.packages || data.packages.length === 0) {
         setGithubRepoError(
           "No supported package dependencies were returned by GitHub's dependency graph.",
@@ -3661,6 +3679,7 @@ function App() {
     bareUrl.search = "";
     bareUrl.hash = "";
     syncHistoryUrl({}, bareUrl.toString());
+    setViewTitle("");
   };
 
   const buildGraph = (
