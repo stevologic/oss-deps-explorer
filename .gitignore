@@ -1,2 +1,5 @@
 # deploy.sh lock file (created on the production server)
 .deploy.lock
+
+# Codex agent sandbox: scratch/mount dir, never part of a build context
+.codex/

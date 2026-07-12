@@ -49,6 +49,11 @@ log "deploying origin/${BRANCH} (${LOCAL_REV:0:12} -> ${REMOTE_REV:0:12}, ${RUNN
 # Discard any local drift and pin the working tree to origin/BRANCH.
 git checkout -qf -B "$BRANCH" "origin/${BRANCH}"
 
+# Purge agent scratch dirs before building: they can hold restricted mounts
+# that the BuildKit context sender can't read (see .dockerignore), which aborts
+# the build with "error from sender: ... permission denied".
+git clean -xffd -- .codex >/dev/null 2>&1 || true
+
 "${COMPOSE[@]}" build --pull
 "${COMPOSE[@]}" up -d --remove-orphans
 
