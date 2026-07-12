@@ -2208,8 +2208,8 @@ li.transitive {
 
 .security-overview-header {
   display: grid;
-  grid-template-columns: minmax(170px, 0.9fr) minmax(230px, 1.15fr) auto;
-  align-items: stretch;
+  grid-template-columns: auto minmax(230px, 1fr) auto;
+  align-items: center;
   gap: 12px;
 }
 
@@ -2407,6 +2407,74 @@ li.transitive {
   line-height: 1.25;
 }
 
+button.security-stat-button {
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+button.security-stat-button:hover,
+button.security-stat-button:focus-visible {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 1px var(--primary-color) inset;
+}
+
+.security-stat-active {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 1px var(--primary-color) inset;
+}
+
+.security-stat-active .security-stat-detail {
+  color: var(--primary-color);
+  font-weight: 700;
+}
+
+.osv-legend {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-left: auto;
+  color: var(--neutral-color);
+  font-size: 0.72rem;
+}
+
+.osv-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.osv-legend-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.osv-legend-dot-vulnerable {
+  background: var(--error-color);
+}
+
+.osv-legend-dot-clean {
+  background: #999;
+}
+
+.osv-legend-dot-unknown {
+  background: transparent;
+  border: 2px solid var(--unknown-color);
+  width: 7px;
+  height: 7px;
+}
+
+.finding-more {
+  margin: -4px 0 0;
+  color: var(--neutral-color);
+  font-size: 0.75rem;
+}
+
 .security-stat-clean {
   border-color: rgba(22, 138, 86, 0.22);
 }
@@ -2491,6 +2559,7 @@ li.transitive {
 .triage-filter-shell {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   min-width: 0;
 }
@@ -3987,37 +4056,39 @@ a:hover {
 
 /* Final modern cascade overrides: keep after legacy responsive rules. */
 :root {
-  --background-default: #f5f7fb;
+  --background-default: #f3f6fa;
   --background-paper: #ffffff;
-  --text-color: #18202b;
-  --muted-color: #667085;
-  --primary-color: #0f6970;
+  --text-color: #16202c;
+  --muted-color: #5f7085;
+  --primary-color: #0e7490;
   --secondary-color: #7f5b11;
-  --success-color: #168a56;
-  --warning-color: #b56b00;
-  --error-color: #c93737;
+  --success-color: #14804a;
+  --warning-color: #b45309;
+  --error-color: #c33c3c;
   --unknown-color: #8a6a12;
-  --neutral-color: #6b7280;
+  --neutral-color: #64748b;
   --neutral-dark-color: #475467;
-  --success-dark-color: #dff6ea;
-  --warning-dark-color: #fff4d6;
-  --error-dark-color: #ffe3e3;
-  --border-color: #d8dee8;
-  --header-bg: rgba(255, 255, 255, 0.94);
-  --panel-shadow: 0 14px 34px rgba(16, 24, 40, 0.08);
-  --soft-shadow: 0 6px 18px rgba(16, 24, 40, 0.06);
+  --success-dark-color: #def7ec;
+  --warning-dark-color: #fef3c7;
+  --error-dark-color: #fee2e2;
+  --border-color: #d3dce8;
+  --header-bg: rgba(255, 255, 255, 0.9);
+  --panel-shadow: 0 14px 34px rgba(13, 34, 59, 0.09);
+  --soft-shadow: 0 6px 18px rgba(13, 34, 59, 0.07);
   --icon-filter: brightness(0) saturate(100%) invert(19%) sepia(9%)
     saturate(1007%) hue-rotate(171deg) brightness(94%) contrast(89%);
   --control-height: 42px;
+  --font-mono: "Cascadia Code", "JetBrains Mono", "Fira Code", "SF Mono",
+    Menlo, Consolas, ui-monospace, monospace;
 }
 
 body {
   min-height: 100vh;
   padding: 0 var(--page-gutter) 40px;
   background:
-    linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(239, 243, 247, 0.96)),
-    radial-gradient(circle at 12% 0, rgba(15, 105, 112, 0.16), transparent 34%),
-    radial-gradient(circle at 88% 4%, rgba(181, 107, 0, 0.1), transparent 30%);
+    linear-gradient(180deg, rgba(247, 250, 253, 0.97), rgba(238, 243, 249, 0.97)),
+    radial-gradient(ellipse at 14% -6%, rgba(14, 116, 144, 0.14), transparent 40%),
+    radial-gradient(ellipse at 86% -2%, rgba(2, 132, 199, 0.08), transparent 34%);
   color: var(--text-color);
 }
 
@@ -5459,40 +5530,54 @@ html[data-theme="light"] {
 
 html[data-theme="dark"] {
   color-scheme: dark;
-  --background-default: #0b1014;
-  --background-paper: #111820;
-  --text-color: #e6edf3;
-  --muted-color: #a9b4c0;
-  --primary-color: #2dd4bf;
+  --background-default: #05080f;
+  --background-paper: #0b111c;
+  --text-color: #d9e3ef;
+  --muted-color: #94a5ba;
+  --primary-color: #22d3ee;
   --secondary-color: #f0b454;
-  --success-color: #37d989;
-  --warning-color: #f0b454;
-  --error-color: #ff6b6b;
-  --unknown-color: #d8b45b;
-  --neutral-color: #93a1af;
-  --neutral-dark-color: #71808f;
-  --success-dark-color: #0d3b2a;
-  --warning-dark-color: #3b2d0c;
-  --error-dark-color: #442020;
-  --border-color: #26323d;
-  --header-bg: rgba(10, 15, 20, 0.94);
-  --panel-shadow: 0 18px 42px rgba(0, 0, 0, 0.34);
-  --soft-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
+  --success-color: #34d399;
+  --warning-color: #fbbf24;
+  --error-color: #f87171;
+  --unknown-color: #e3b341;
+  --neutral-color: #8ea0b5;
+  --neutral-dark-color: #6c7f94;
+  --success-dark-color: #0b3527;
+  --warning-dark-color: #3a2d0a;
+  --error-dark-color: #431e1e;
+  --border-color: #1b283a;
+  --header-bg: rgba(5, 9, 16, 0.88);
+  --panel-shadow: 0 18px 44px rgba(0, 0, 0, 0.44);
+  --soft-shadow: 0 10px 26px rgba(0, 0, 0, 0.32);
   --icon-filter: brightness(0) saturate(100%) invert(94%) sepia(7%)
     saturate(528%) hue-rotate(172deg) brightness(94%) contrast(93%);
 }
 
 html[data-theme="dark"] body {
   background:
-    linear-gradient(180deg, rgba(13, 18, 24, 0.98), rgba(9, 13, 18, 0.98)),
-    radial-gradient(circle at 14% 0, rgba(45, 212, 191, 0.14), transparent 34%),
-    radial-gradient(circle at 88% 4%, rgba(240, 180, 84, 0.08), transparent 30%);
+    repeating-linear-gradient(
+      0deg,
+      rgba(148, 163, 184, 0.03) 0,
+      rgba(148, 163, 184, 0.03) 1px,
+      transparent 1px,
+      transparent 36px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      rgba(148, 163, 184, 0.03) 0,
+      rgba(148, 163, 184, 0.03) 1px,
+      transparent 1px,
+      transparent 36px
+    ),
+    radial-gradient(ellipse at 16% -8%, rgba(34, 211, 238, 0.15), transparent 44%),
+    radial-gradient(ellipse at 86% -4%, rgba(56, 189, 248, 0.07), transparent 36%),
+    linear-gradient(180deg, #070d17, #05080f 62%);
   color: var(--text-color);
 }
 
 html[data-theme="dark"] a,
 html[data-theme="dark"] a:visited {
-  color: #67e8d6;
+  color: #5eead4;
 }
 
 html[data-theme="dark"] a:hover {
@@ -6422,4 +6507,133 @@ html[data-theme="dark"] .console-box {
   background: #05080c;
   border-color: #26323d;
   color: #e6edf3;
+}
+
+/* ----------------------------------------------------------------------
+   Security console skin: shared signature layer for both themes.
+   Keep last so it wins the cascade. */
+
+::selection {
+  background: rgba(14, 116, 144, 0.25);
+}
+
+html[data-theme="dark"] ::selection {
+  background: rgba(34, 211, 238, 0.3);
+}
+
+:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 2px;
+}
+
+/* Brand: terminal-style wordmark with a live cursor. */
+.page-title {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.page-title::after {
+  content: "_";
+  margin-left: 2px;
+  color: var(--primary-color);
+  font-weight: 700;
+  animation: brand-cursor 1.2s steps(2, start) infinite;
+}
+
+@keyframes brand-cursor {
+  to {
+    visibility: hidden;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-title::after {
+    animation: none;
+  }
+}
+
+html[data-theme="dark"] .page-title {
+  border-bottom: 1px solid rgba(34, 211, 238, 0.22);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+
+/* Data reads as data: monospace for identifiers, versions, and counts. */
+.finding-main a,
+.finding-risk,
+.cve-inline a,
+.cve-column a,
+.cve-column-leftright a,
+.finding-advisories a,
+.security-stat-value,
+.risk-number,
+.filter-count,
+.cache-indicator,
+.version-suggestions button,
+.package-suggestion-btn,
+.direct-list li,
+.transitive-list li,
+.github-package-name,
+.github-package-version,
+.osv-legend,
+.summary-risk,
+.summary-clean,
+.summary-unknown,
+.console-box {
+  font-family: var(--font-mono);
+}
+
+.graph-label {
+  font-family: var(--font-mono);
+}
+
+/* Verdict detail text sits on tinted banners: use the darker neutral in
+   light mode so it clears AA contrast on the red/amber tints. */
+.triage-verdict-copy span {
+  color: var(--neutral-dark-color);
+}
+
+html[data-theme="dark"] .triage-verdict-copy span {
+  color: var(--muted-color);
+}
+
+/* Panels sit on the grid backdrop with a crisper edge. */
+html[data-theme="dark"] .form-wrapper,
+html[data-theme="dark"] .security-overview,
+html[data-theme="dark"] .cve-results-panel,
+html[data-theme="dark"] .github-import-results {
+  border-color: #223349;
+  box-shadow:
+    0 0 0 1px rgba(34, 211, 238, 0.05),
+    var(--panel-shadow);
+}
+
+/* Accent the active state of primary controls. */
+html[data-theme="dark"] .dependency-filter-row button.active,
+html[data-theme="dark"] .search-mode-tabs .active {
+  box-shadow: 0 0 14px rgba(34, 211, 238, 0.35);
+}
+
+/* Slim console scrollbars. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--neutral-dark-color) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--neutral-dark-color);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
 }

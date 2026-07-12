@@ -3158,6 +3158,7 @@ function App() {
     setConsoleLines([]);
     setShowConsole(false);
     setVulnerabilityStatus({});
+    setDependencyListFilter("all");
 
     setCacheStatus("");
 
@@ -3897,9 +3898,21 @@ function App() {
       }
       return largeGraph ? 24 : compactGraph ? 15 : 20;
     };
+    // Pick the label side with hysteresis: the perpetual float jitter keeps
+    // nodes near the midline (always, for a single node) oscillating across
+    // it, so only flip sides once a node clearly crosses the center.
     const graphLabelAnchor = (d) => {
       if (compactGraph) return "middle";
-      return (d.x || width / 2) > width / 2 ? "end" : "start";
+      const x = d.x === undefined || d.x === null ? width / 2 : d.x;
+      const margin = 18;
+      if (d.labelAnchorSide === "end") {
+        if (x < width / 2 - margin) d.labelAnchorSide = "start";
+      } else if (d.labelAnchorSide === "start") {
+        if (x > width / 2 + margin) d.labelAnchorSide = "end";
+      } else {
+        d.labelAnchorSide = x > width / 2 ? "end" : "start";
+      }
+      return d.labelAnchorSide;
     };
     const graphLabelX = (d) => {
       if (compactGraph) return d.x;
@@ -4694,136 +4707,47 @@ function App() {
                   label: "No known OSV risk",
                   detail: `${analysis.totals.cleanPackages} packages checked clean.`,
                 };
+      // Always show the two headline numbers; secondary tiles only appear
+      // when they carry a nonzero count.
       const landscape = [
         {
           key: "vulnerable",
           value: analysis.totals.findings,
-          label: "Vulnerable",
-          detail: "packages",
+          label: "Vulnerable packages",
           icon: "icons/error.svg",
           tone: hasFindings ? "danger" : "clean",
+          filterKey: "vulnerable",
         },
-        {
+        highCritical > 0 && {
           key: "priority",
           value: highCritical,
-          label: "High/Critical",
-          detail: "priority fixes",
+          label: "High / critical",
           icon: "icons/warning.svg",
-          tone: highCritical > 0 ? "danger" : "muted",
+          tone: "danger",
         },
-        {
+        analysis.totals.transitiveFindings > 0 && {
           key: "transitive",
           value: analysis.totals.transitiveFindings,
-          label: "Transitive",
-          detail: "findings",
+          label: "Transitive findings",
           icon: "icons/transitive.svg",
-          tone: analysis.totals.transitiveFindings > 0 ? "review" : "muted",
+          tone: "review",
         },
         {
           key: "clean",
           value: analysis.totals.cleanPackages,
           label: "Checked clean",
-          detail: "no advisory",
           icon: "icons/success.svg",
           tone: "clean",
         },
-        {
+        hasUnresolved && {
           key: "unresolved",
           value: analysis.totals.unresolvedPackages,
           label: "OSV gaps",
-          detail: "unresolved",
           icon: "icons/cache.svg",
-          tone: hasUnresolved ? "unknown" : "muted",
+          tone: "unknown",
+          filterKey: "unknown",
         },
-      ];
-      const nextSteps = hasFindings
-        ? [
-            {
-              key: "patch",
-              tone: highCritical > 0 ? "danger" : "review",
-              icon: highCritical > 0 ? "icons/error.svg" : "icons/warning.svg",
-              label: highCritical > 0 ? "Patch priority packages" : "Review advisories",
-              detail:
-                highCritical > 0
-                  ? "Start with high and critical packages before lower severity work."
-                  : "Inspect affected versions and decide whether a version bump is needed.",
-            },
-            {
-              key: "paths",
-              tone: analysis.totals.transitiveFindings > 0 ? "review" : "muted",
-              icon: "icons/transitive.svg",
-              label:
-                analysis.totals.transitiveFindings > 0
-                  ? "Trace transitive paths"
-                  : "Check direct impact",
-              detail:
-                analysis.totals.transitiveFindings > 0
-                  ? "Use the tree filters to see which parent packages bring risk in."
-                  : "The risky packages are direct or root dependencies.",
-            },
-            {
-              key: "evidence",
-              tone: "clean",
-              icon: "icons/checks.svg",
-              label: "Export evidence",
-              detail: "Download SBOM or CSV for tracking and review.",
-            },
-          ]
-        : hasUnresolved
-          ? [
-              {
-                key: "retry",
-                tone: "unknown",
-                icon: "icons/cache.svg",
-                label: "Resolve lookup gaps",
-                detail: "Filter OSV gaps and rerun analysis for packages without a result.",
-              },
-              {
-                key: "monitor",
-                tone: "clean",
-                icon: "icons/checks.svg",
-                label: "Keep the clean set",
-                detail: "Export JSON or SBOM once unresolved packages are cleared.",
-              },
-            ]
-          : [
-              {
-                key: "clean",
-                tone: "clean",
-                icon: "icons/success.svg",
-                label: includeVuln ? "Clean OSV scan" : "Risk not classified",
-                detail: includeVuln
-                  ? "No OSV advisories were returned for this dependency set."
-                  : "OSV vulnerability checks were disabled for this run.",
-              },
-              {
-                key: "evidence",
-                tone: "muted",
-                icon: "icons/checks.svg",
-                label: "Keep evidence",
-                detail: "Download JSON or SBOM for audit records.",
-              },
-            ];
-      const filterOptions = [
-        {
-          key: "all",
-          label: "All dependencies",
-          count: analysis.totals.checkedPackages,
-          disabled: false,
-        },
-        {
-          key: "vulnerable",
-          label: "Vulnerable",
-          count: analysis.totals.findings,
-          disabled: !includeVuln || analysis.findings.length === 0,
-        },
-        {
-          key: "unknown",
-          label: "Needs OSV check",
-          count: analysis.totals.unresolvedPackages,
-          disabled: !includeVuln || analysis.totals.unresolvedPackages === 0,
-        },
-      ];
+      ].filter(Boolean);
       const exportButton = (format, label, options = {}) =>
         e(
           "button",
@@ -4835,8 +4759,7 @@ function App() {
             title: options.title,
             "aria-label": options.ariaLabel || `Export ${label}`,
           },
-          e("span", { className: "security-action-icon", "aria-hidden": "true" }, options.icon),
-          e("span", null, label),
+          label,
         );
       return e(
         "section",
@@ -4848,13 +4771,6 @@ function App() {
             "div",
             { className: "security-title-block" },
             e("h3", null, "Security Triage"),
-            e(
-              "p",
-              { className: "triage-summary-line" },
-              includeVuln
-                ? `${analysis.totals.checkedPackages} packages tracked, ${analysis.totals.cleanPackages} clean, ${analysis.totals.unresolvedPackages} OSV gaps`
-                : `${analysis.totals.checkedPackages} packages tracked, OSV not checked`,
-            ),
           ),
           e(
             "div",
@@ -4870,22 +4786,28 @@ function App() {
           e(
             "div",
             { className: "security-actions", "aria-label": "Download security data" },
+            e(
+              "span",
+              { className: "security-actions-label", "aria-hidden": "true" },
+              "Export",
+            ),
             exportButton("json", "JSON", {
-              icon: "{}",
+              title: "Full security analysis as JSON",
               ariaLabel: "Export JSON security report",
             }),
             exportButton("cyclonedx", "SBOM", {
-              icon: "SB",
-              title: "Export CycloneDX SBOM with OSV vulnerability details",
+              title: "CycloneDX SBOM with OSV vulnerability details",
               ariaLabel: "Export CycloneDX SBOM",
             }),
             exportButton("graphviz", "DOT", {
-              icon: "GV",
-              title: "Export GraphViz DOT dependency graph with OSV status attributes",
+              title: "GraphViz dependency graph with OSV status attributes",
               ariaLabel: "Export GraphViz DOT dependency graph",
             }),
             exportButton("csv", "CSV", {
-              icon: "CSV",
+              title:
+                analysis.findings.length === 0
+                  ? "No vulnerable packages to export"
+                  : "Vulnerable packages as CSV",
               disabled: analysis.findings.length === 0,
               ariaLabel: "Export vulnerable package CSV",
             }),
@@ -4894,119 +4816,148 @@ function App() {
         e(
           "div",
           { className: "security-stat-grid", "aria-label": "Risk landscape" },
-          landscape.map((item) =>
-            e(
-              "div",
-              {
-                key: item.key,
-                className: `security-stat security-stat-${item.tone}`,
-              },
+          landscape.map((item) => {
+            const filterable =
+              includeVuln && item.filterKey && item.value > 0;
+            const active =
+              filterable && dependencyListFilter === item.filterKey;
+            const children = [
               e(
                 "span",
-                { className: "security-stat-icon", "aria-hidden": "true" },
+                { key: "icon", className: "security-stat-icon", "aria-hidden": "true" },
                 e("img", { src: item.icon, alt: "" }),
               ),
               e(
                 "span",
-                { className: "security-stat-copy" },
+                { key: "copy", className: "security-stat-copy" },
                 e(
                   "span",
                   { className: `security-stat-value risk-${item.tone}` },
                   item.value,
                 ),
                 e("span", { className: "security-stat-label" }, item.label),
-                e("span", { className: "security-stat-detail" }, item.detail),
+                filterable &&
+                  e(
+                    "span",
+                    { className: "security-stat-detail" },
+                    active ? "showing in lists" : "click to filter lists",
+                  ),
               ),
-            ),
-          ),
-        ),
-        e(
-          "div",
-          { className: "triage-next-steps" },
-          nextSteps.map((step) =>
-            e(
-              "div",
-              {
-                key: step.key,
-                className: `triage-step triage-step-${step.tone}`,
-              },
-              e("img", { src: step.icon, alt: "", "aria-hidden": "true" }),
-              e(
-                "span",
-                null,
-                e("strong", null, step.label),
-                e("span", null, step.detail),
-              ),
-            ),
-          ),
-        ),
-        e(
-          "div",
-          { className: "triage-filter-shell" },
-          e("span", { className: "triage-filter-label" }, "Filter"),
-          e(
-            "div",
-            { className: "dependency-filter-row" },
-            filterOptions.map((option) =>
-              e(
-                "button",
+            ];
+            if (!filterable) {
+              return e(
+                "div",
                 {
-                  key: option.key,
-                  type: "button",
-                  className: dependencyListFilter === option.key ? "active" : "",
-                  onClick: () => setDependencyListFilter(option.key),
-                  disabled: option.disabled,
+                  key: item.key,
+                  className: `security-stat security-stat-${item.tone}`,
                 },
-                e("span", null, option.label),
-                e("span", { className: "filter-count" }, option.count),
+                children,
+              );
+            }
+            return e(
+              "button",
+              {
+                key: item.key,
+                type: "button",
+                className: `security-stat security-stat-${item.tone} security-stat-button${active ? " security-stat-active" : ""}`,
+                "aria-pressed": active,
+                title: active
+                  ? "Show all dependencies in the lists below"
+                  : `Filter the dependency lists to ${item.label.toLowerCase()}`,
+                onClick: () =>
+                  setDependencyListFilter(active ? "all" : item.filterKey),
+              },
+              children,
+            );
+          }),
+        ),
+        analysis.findings.length > 0 &&
+          e(
+            "ol",
+            { className: "finding-list" },
+            analysis.findings.slice(0, 8).map((finding) =>
+              e(
+                "li",
+                { key: `${finding.scope}-${finding.name}@${finding.version}` },
+                e(
+                  "div",
+                  { className: "finding-main" },
+                  e("span", { className: `finding-risk risk-${finding.risk}` }, finding.risk),
+                  e(
+                    "a",
+                    {
+                      href: finding.registryUrl,
+                      target: "_blank",
+                      rel: "noopener noreferrer",
+                    },
+                    `${finding.name}@${finding.version}`,
+                  ),
+                  e("span", { className: "finding-scope" }, finding.scope),
+                ),
+                renderAdvisoryLinks(
+                  finding.advisories,
+                  "cve-inline finding-advisories",
+                ),
+                renderAdvisoryDescriptions(finding.advisories),
               ),
             ),
           ),
-        ),
-        includeVuln &&
+        analysis.findings.length > 8 &&
           e(
             "p",
-            { className: "osv-status-note" },
-            "Graph dots: gray is checked clean; amber outline means OSV needs another lookup.",
+            { className: "finding-more" },
+            `${analysis.findings.length - 8} more vulnerable packages - use the Vulnerable filter to see all of them in the dependency lists.`,
           ),
-        analysis.findings.length > 0
-          ? e(
-              "ol",
-              { className: "finding-list" },
-              analysis.findings.slice(0, 8).map((finding) =>
-                e(
-                  "li",
-                  { key: `${finding.scope}-${finding.name}@${finding.version}` },
-                  e(
-                    "div",
-                    { className: "finding-main" },
-                    e("span", { className: `finding-risk risk-${finding.risk}` }, finding.risk),
-                    e(
-                      "a",
-                      {
-                        href: finding.registryUrl,
-                        target: "_blank",
-                        rel: "noopener noreferrer",
-                      },
-                      `${finding.name}@${finding.version}`,
-                    ),
-                    e("span", { className: "finding-scope" }, finding.scope),
-                  ),
-                  renderAdvisoryLinks(
-                    finding.advisories,
-                    "cve-inline finding-advisories",
-                  ),
-                  renderAdvisoryDescriptions(finding.advisories),
-                ),
+        includeVuln &&
+          e(
+            "div",
+            { className: "triage-filter-shell" },
+            dependencyListFilter !== "all" &&
+              e(
+                "span",
+                { className: "triage-filter-label" },
+                dependencyListFilter === "vulnerable"
+                  ? "Lists filtered to vulnerable packages"
+                  : "Lists filtered to unresolved OSV lookups",
               ),
-            )
-          : e(
+            e(
               "div",
-              { className: "empty-dependencies security-empty" },
-              includeVuln
-                ? "No vulnerable packages returned by OSV for this dependency set."
-                : "OSV checking is disabled for this run.",
+              { className: "osv-legend", "aria-label": "Graph color legend" },
+              e(
+                "span",
+                { className: "osv-legend-item" },
+                e("span", {
+                  className: "osv-legend-dot osv-legend-dot-vulnerable",
+                  "aria-hidden": "true",
+                }),
+                "vulnerable",
+              ),
+              e(
+                "span",
+                { className: "osv-legend-item" },
+                e("span", {
+                  className: "osv-legend-dot osv-legend-dot-clean",
+                  "aria-hidden": "true",
+                }),
+                "checked clean",
+              ),
+              e(
+                "span",
+                { className: "osv-legend-item" },
+                e("span", {
+                  className: "osv-legend-dot osv-legend-dot-unknown",
+                  "aria-hidden": "true",
+                }),
+                "needs OSV lookup",
+              ),
             ),
+          ),
+        !includeVuln &&
+          e(
+            "div",
+            { className: "empty-dependencies security-empty" },
+            "OSV checking is disabled for this run. Enable the vulnerabilities option and analyze again to classify risk.",
+          ),
       );
     };
 
