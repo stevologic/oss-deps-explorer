@@ -49,12 +49,22 @@ log "deploying origin/${BRANCH} (${LOCAL_REV:0:12} -> ${REMOTE_REV:0:12}, ${RUNN
 # Discard any local drift and pin the working tree to origin/BRANCH.
 git checkout -qf -B "$BRANCH" "origin/${BRANCH}"
 
-# Purge agent scratch dirs before building: they can hold restricted mounts
-# that the BuildKit context sender can't read (see .dockerignore), which aborts
-# the build with "error from sender: ... permission denied".
-git clean -xffd -- .codex >/dev/null 2>&1 || true
+# Build from a pristine export of the tree, not the live repo dir. This host
+# runs the deploy sandboxed, so the live dir holds paths the BuildKit context
+# sender can't read -- the .git object store and agent scratch (.codex) -- and
+# it walks into them regardless of .dockerignore, aborting the build with
+# "error from sender: open .../<path>: permission denied". `git archive` emits
+# only tracked files: no .git, no scratch, nothing unreadable to trip over.
+BUILD_DIR="$(mktemp -d)"
+trap 'rm -rf "$BUILD_DIR"' EXIT
+git archive --format=tar "origin/${BRANCH}" | tar -x -C "$BUILD_DIR"
 
-"${COMPOSE[@]}" build --pull
+# Build the images in the clean context (compose project name is pinned in the
+# compose file, so image tags are identical regardless of directory)...
+( cd "$BUILD_DIR" && "${COMPOSE[@]}" build --pull )
+
+# ...then start from the real repo dir so relative bind mounts (./Caddyfile)
+# resolve. `up` reuses the images just built and does not rebuild.
 "${COMPOSE[@]}" up -d --remove-orphans
 
 # Wait for the API to answer before declaring success.
