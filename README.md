@@ -219,6 +219,55 @@ The API will then be available on `localhost:8080` and the UI on `localhost:8081
 Nodes in the UI's dependency graph link to the corresponding package page for
 each supported registry when available.
 
+`docker-compose.yml` is the local development stack. Production deployments
+use `docker-compose.prod.yml` instead — see
+[Deploying to production](#deploying-to-production-ossdedev).
+
+## Deploying to production (ossde.dev)
+
+The production stack (`docker-compose.prod.yml`) runs four services: Caddy
+(TLS termination and routing), the Go API, the nginx UI, and Redis. Caddy is
+the only service with published ports — it serves `https://ossde.dev`,
+routes `/api/*` to the API and everything else to the UI, and provisions
+Let's Encrypt certificates automatically (persisted in the `caddy_data`
+volume, so certificates survive restarts and redeploys).
+
+### Server prerequisites
+
+- A Linux server with Docker Engine and the compose plugin installed
+- Ports 80 and 443 open (443/udp too if you want HTTP/3)
+- A DNS A record pointing `ossde.dev` at the server
+
+### First deploy
+
+```bash
+sudo git clone https://github.com/stevologic/oss-deps-explorer /opt/oss-deps-explorer
+cd /opt/oss-deps-explorer
+./deploy.sh
+```
+
+`deploy.sh` checks out `origin/main`, builds the images, starts the stack,
+and waits for the API health check to pass before reporting success.
+
+### Keeping it up to date
+
+`deploy.sh` is idempotent and guarded by a lock file, so schedule it with
+cron to track `main` automatically:
+
+```cron
+*/5 * * * * /opt/oss-deps-explorer/deploy.sh >> /var/log/oss-deps-explorer-deploy.log 2>&1
+```
+
+When `HEAD` already matches `origin/main` and all services are running it
+exits immediately without touching Docker. Overrides:
+
+- `FORCE=1 ./deploy.sh` — rebuild and restart even when already up to date
+- `BRANCH=development ./deploy.sh` — track a different branch
+
+A failed health check leaves the script with exit code 1 and prints the
+container status plus recent API logs, so cron's output (or your log file)
+shows what went wrong.
+
 ### Dependency Card
 
 Clicking a node reveals additional repository details pulled from GitHub's
