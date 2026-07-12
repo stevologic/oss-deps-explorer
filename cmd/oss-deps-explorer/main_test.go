@@ -553,7 +553,7 @@ func TestFetchAllDeps(t *testing.T) {
 		":dep3:3": "github.com/dep3/dep3",
 	}}
 	ctx := context.Background()
-	res, parents, errs, err := fetchAllDeps(ctx, f, "", "root", "1", true, map[string]struct{}{}, "", "npm", nil, 0)
+	res, parents, errs, err := fetchAllDeps(ctx, f, "", "root", "1", true, "npm", nil, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -588,7 +588,7 @@ func TestFetchAllDepsUsesResolvedDependencyVersions(t *testing.T) {
 		},
 	}
 	ctx := context.Background()
-	res, _, errs, err := fetchAllDeps(ctx, f, "", "root", "canary", true, map[string]struct{}{}, "", "npm", nil, 0)
+	res, _, errs, err := fetchAllDeps(ctx, f, "", "root", "canary", true, "npm", nil, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

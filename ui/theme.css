@@ -2913,6 +2913,12 @@ button.security-stat-button:focus-visible {
   color: var(--risk-color);
 }
 
+.risk-advisory {
+  --risk-color: var(--warning-color);
+  --risk-dark-color: var(--warning-dark-color);
+  color: var(--risk-color);
+}
+
 .risk-no-advisory {
   --risk-color: var(--neutral-color);
   --risk-dark-color: var(--neutral-dark-color);
@@ -6636,4 +6642,179 @@ html[data-theme="dark"] .search-mode-tabs .active {
 
 *::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* ----------------------------------------------------------------------
+   Loading overlay: themed panel that matches the app's card language. */
+
+.loading-overlay {
+  padding-top: 0;
+  justify-content: center;
+  align-items: center;
+}
+
+.loading-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: min(92vw, 700px);
+  max-height: 86vh;
+  overflow: hidden;
+  margin: 0 16px;
+  padding: 30px 28px 24px;
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  background: var(--background-paper);
+  box-shadow: var(--panel-shadow);
+}
+
+.loading-spinner {
+  width: 42px;
+  height: 42px;
+  border: 3px solid var(--border-color);
+  border-top-color: var(--primary-color);
+  border-radius: 50%;
+  animation: loading-spin 0.9s linear infinite;
+}
+
+@keyframes loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-spinner {
+    animation: none;
+  }
+
+  .bounce-char {
+    animation: none;
+  }
+}
+
+.loading-title {
+  font-family: var(--font-mono);
+  font-size: 0.72em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-color);
+}
+
+.loading-status {
+  margin-top: 0;
+  font-size: 0.46em;
+  color: var(--muted-color);
+}
+
+.loading-actions {
+  margin-top: 6px;
+}
+
+.console-box {
+  width: 100%;
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 0.42em;
+  line-height: 1.55;
+  text-align: left;
+  scrollbar-width: thin;
+  -ms-overflow-style: auto;
+}
+
+.console-box::-webkit-scrollbar {
+  display: block;
+  width: 9px;
+}
+
+html[data-theme="dark"] .loading-card {
+  border-color: #223349;
+  background: rgba(13, 20, 27, 0.98);
+  box-shadow:
+    0 0 0 1px rgba(34, 211, 238, 0.06),
+    var(--panel-shadow);
+}
+
+@media (max-width: 700px) {
+  .loading-card {
+    padding: 22px 16px 18px;
+  }
+}
+
+/* Footer brand block: name/copyright row with a muted tagline beneath. */
+.footer-brand-block {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.footer-tagline {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--muted-color);
+  overflow-wrap: anywhere;
+}
+
+/* Sample starter chips on the CVE and Repository tabs: a labeled row of
+   one-click suggestions that reuses the package-suggestion chip styling. */
+.sample-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.sample-suggestions-label {
+  flex-basis: 100%;
+  margin: 0 0 2px;
+  color: var(--muted-color);
+  font-size: 0.85rem;
+}
+
+/* Dependency-graph collapse control: hidden on desktop (graph always shown),
+   shown at phone widths where the graph starts collapsed to save space. */
+.graph-collapse-toggle {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .graph-collapse-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    margin: 0 0 10px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    font-family: var(--font-mono);
+    font-size: 0.95rem;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .graph-collapse-title {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .graph-collapse-hint {
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--primary-color);
+  }
+
+  .graph-collapse-chevron {
+    color: var(--muted-color);
+    font-size: 0.9rem;
+  }
+
+  .graph-container.collapsed {
+    display: none;
+  }
 }
