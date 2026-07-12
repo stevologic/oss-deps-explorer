@@ -32,18 +32,24 @@
     <script src="vendor/react-dom.production.min.js"></script>
     <script src="vendor/d3.v7.min.js"></script>
 
-    <link rel="stylesheet" href="theme.css?v=20260710-04" />
+    <link rel="stylesheet" href="theme.css?v=20260712-02" />
   </head>
   <body>
     <div id="app"></div>
-    <script src="app.js?v=20260711-01"></script>
+    <script src="app.js?v=20260712-02"></script>
 
     <footer class="page-footer" aria-label="Site footer">
       <div class="footer-content">
-        <p class="footer-brand">
-          <strong>OSS Dependency Explorer</strong>
-          <span>&copy; 2026</span>
-        </p>
+        <div class="footer-brand-block">
+          <p class="footer-brand">
+            <strong>OSS Dependency Explorer</strong>
+            <span>&copy; 2026</span>
+          </p>
+          <p class="footer-tagline">
+            Dependency, vulnerability, and license intelligence powered by
+            deps.dev, OSV.dev, and OpenSSF Scorecard.
+          </p>
+        </div>
         <nav class="footer-links" aria-label="Footer links">
           <a
             href="https://github.com/stevologic"
@@ -51,6 +57,13 @@
             rel="noopener noreferrer"
           >
             GitHub
+          </a>
+          <a
+            href="https://deps.dev/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            deps.dev
           </a>
           <a href="https://osv.dev/" target="_blank" rel="noopener noreferrer">
             OSV

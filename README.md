@@ -2,11 +2,11 @@
 
 `oss-deps-explorer` is a lightweight web application that exposes a REST API and optional browser UI for exploring package dependencies. The service proxies multiple package ecosystems and returns dependencies for a requested package. Dependency data is fetched from the stable [deps.dev](https://deps.dev) v3 API for npm, PyPI, Go, Maven, Cargo, RubyGems, and NuGet, and from Packagist for Composer. Responses are cached in Redis for 24 hours when Redis is available.
 
+![Package analysis view with the interactive dependency graph, OSV severity coloring, and repository metadata](docs/screenshots/package-analysis.png)
 
+![CVE lookup view showing advisory details, severity, and remediation guidance](docs/screenshots/cve-lookup.png)
 
-<img width="1495" height="1328" alt="image" src="https://github.com/user-attachments/assets/cd662656-877c-4883-84db-88ffe62921e8" />
-
-
+![Repository import view with the resolved full dependency chain graph and export toolbar](docs/screenshots/repository-import.png)
 
 
 ## Architecture
@@ -55,7 +55,10 @@ container on port 8081) offers three analysis modes:
   package analysis.
 * **Repository** – import a GitHub repository's dependency graph SBOM for
   license policy review, OSV triage, and filtered CSV/CycloneDX/SPDX/DOT
-  exports, including skipped (unsupported) dependencies.
+  exports, including skipped (unsupported) dependencies. Version-range specs
+  from the SBOM (for example `^2.2.1`) are resolved to the newest matching
+  release so ranged packages join OSV coloring and dependency-chain
+  resolution alongside exact-version packages.
 
 Every view is a shareable deep link — `?manager=npm&name=express&version=4.18.2`,
 `?cve=CVE-2024-3094`, or `?repo=owner/name` — and browser back/forward
@@ -216,8 +219,9 @@ docker-compose up --build
 
 
 The API will then be available on `localhost:8080` and the UI on `localhost:8081`.
-Nodes in the UI's dependency graph link to the corresponding package page for
-each supported registry when available.
+Clicking a node (or its label) in the UI's dependency graph pivots straight
+into an in-app analysis of that package; registry links for each package stay
+available from the dependency lists and security panels.
 
 `docker-compose.yml` is the local development stack. Production deployments
 use `docker-compose.prod.yml` instead — see

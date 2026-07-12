@@ -274,6 +274,66 @@ const wellKnownPackages = {
   ],
 };
 
+// Well-known advisories offered as one-click starters on the CVE tab. Each
+// resolves in OSV (with NVD fallback for the CVE ids) and spans a different
+// ecosystem so the sample results showcase the affected-package view.
+const sampleAdvisories = [
+  {
+    label: "xz backdoor",
+    id: "CVE-2024-3094",
+    title: "CVE-2024-3094 — malicious backdoor planted in xz / liblzma",
+  },
+  {
+    label: "Log4Shell",
+    id: "CVE-2021-44228",
+    title: "CVE-2021-44228 — Apache Log4j remote code execution",
+  },
+  {
+    label: "Spring4Shell",
+    id: "CVE-2022-22965",
+    title: "CVE-2022-22965 — Spring Framework remote code execution",
+  },
+  {
+    label: "lodash",
+    id: "CVE-2021-23337",
+    title: "CVE-2021-23337 — lodash command injection via template",
+  },
+  {
+    label: "axios",
+    id: "CVE-2023-45857",
+    title: "CVE-2023-45857 — axios leaks credentials via SSRF",
+  },
+  {
+    label: "minimist",
+    id: "CVE-2021-44906",
+    title: "CVE-2021-44906 — minimist prototype pollution",
+  },
+  {
+    label: "jQuery",
+    id: "CVE-2019-11358",
+    title: "CVE-2019-11358 — jQuery prototype pollution",
+  },
+  {
+    label: "requests",
+    id: "CVE-2023-32681",
+    title: "CVE-2023-32681 — Requests leaks the Proxy-Authorization header",
+  },
+];
+
+// Popular public GitHub projects offered as one-click starters on the
+// Repository tab. All expose a dependency-graph SBOM and cover several
+// ecosystems.
+const sampleRepositories = [
+  { repo: "expressjs/express", title: "Fast, minimalist web framework for Node.js" },
+  { repo: "axios/axios", title: "Promise-based HTTP client for browser and Node.js" },
+  { repo: "vercel/next.js", title: "The React framework for the web" },
+  { repo: "pallets/flask", title: "The Python micro web framework" },
+  { repo: "fastapi/fastapi", title: "High-performance Python web framework" },
+  { repo: "django/django", title: "The Python web framework for perfectionists" },
+  { repo: "gin-gonic/gin", title: "HTTP web framework written in Go" },
+  { repo: "laravel/laravel", title: "PHP web application framework" },
+];
+
 const permissiveLicenseIds = new Set([
   "0BSD",
   "AFL-2.1",
@@ -612,8 +672,8 @@ function App() {
   const [version, setVersion] = React.useState(initialDeepLink?.version || "");
   const [latestVersions, setLatestVersions] = React.useState([]);
   const [versionsToShow, setVersionsToShow] = React.useState(5);
-  const VERSION_SUGGESTION_PAGE_SIZE = 5;
-  const MAX_SUGGESTED_VERSIONS = 24;
+  const VERSION_SUGGESTION_PAGE_SIZE = 25;
+  const MAX_SUGGESTED_VERSIONS = 120;
   const PACKAGE_SUGGESTION_LIMIT = 16;
   const [versionRisk, setVersionRisk] = React.useState({});
   const versionRiskCacheRef = React.useRef(new Map());
@@ -687,6 +747,14 @@ function App() {
   const packageGraphFitSignatureRef = React.useRef("");
   const repoGraphRef = React.useRef(null);
   const [graphResizeKey, setGraphResizeKey] = React.useState(0);
+  // The dependency graph is heavy on small screens, so it starts collapsed at
+  // phone widths and users expand it on demand. Desktop keeps it open.
+  const [graphCollapsed, setGraphCollapsed] = React.useState(
+    () =>
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(max-width: 640px)").matches,
+  );
   const uniqueFormName = React.useMemo(() => `form-${Date.now()}`, []);
   const abortRef = React.useRef({ controller: null, timer: null });
   const [pmURLs, setPmURLs] = React.useState({});
@@ -743,6 +811,10 @@ function App() {
   const [githubRepoTreeCollapsed, setGithubRepoTreeCollapsed] =
     React.useState({});
   const githubRepoTransitiveAbortRef = React.useRef(null);
+  // identityKey -> exact version resolved from a range spec (empty string
+  // when resolution failed); lives for the session so re-imports stay fast.
+  const githubRepoResolvedVersionsRef = React.useRef(new Map());
+  const [, setGithubRepoRangeResolutionTick] = React.useState(0);
   const githubRepoGraphPositionsRef = React.useRef({
     height: 0,
     positions: new Map(),
@@ -767,10 +839,19 @@ function App() {
   const showVersionSuggestions =
     !packageTypeaheadOpen && !version && latestVersions.length > 0;
 
-  const MAX_CONSOLE_LINES = 20;
+  const MAX_CONSOLE_LINES = 80;
+  const MAX_CONSOLE_LINE_LENGTH = 220;
 
   const addConsoleLines = (text) => {
-    const lines = text.trim().split("\n").slice(0, MAX_CONSOLE_LINES);
+    const lines = String(text ?? "")
+      .trim()
+      .split("\n")
+      .slice(0, MAX_CONSOLE_LINES)
+      .map((line) =>
+        line.length > MAX_CONSOLE_LINE_LENGTH
+          ? `${line.slice(0, MAX_CONSOLE_LINE_LENGTH)}…`
+          : line,
+      );
     setConsoleLines((prev) => {
       const merged = [...prev, ...lines];
       return merged.slice(-MAX_CONSOLE_LINES);
@@ -1123,6 +1204,9 @@ function App() {
 
   const riskDotClass = (dep) => {
     if (includeVuln && dep.risk) return `risk-dot risk-${dep.risk}`;
+    if (includeVuln && dep.osvStatus?.status === "vulnerable") {
+      return "risk-dot risk-advisory";
+    }
     if (includeVuln && dep.osvStatus?.status === "no_advisory") {
       return "risk-dot risk-no-advisory";
     }
@@ -1149,10 +1233,16 @@ function App() {
     return color;
   };
 
+  const isUnscoredVulnerable = (d) =>
+    !d.risk && d.osvStatus?.status === "vulnerable";
+
   const getNodeColor = (d) => {
     if (d.root) {
       if (includeVuln && d.risk && riskColors[d.risk]) {
         return riskColors[d.risk];
+      }
+      if (includeVuln && isUnscoredVulnerable(d)) {
+        return "var(--warning-color)";
       }
       if (includeVuln && isUnresolvedOsvStatus(d.osvStatus)) {
         return "var(--unknown-color)";
@@ -1161,6 +1251,9 @@ function App() {
     }
     if (includeVuln && d.risk && riskColors[d.risk]) {
       return riskColors[d.risk];
+    }
+    if (includeVuln && isUnscoredVulnerable(d)) {
+      return "var(--warning-color)";
     }
     if (includeVuln && isUnresolvedOsvStatus(d.osvStatus)) {
       return "var(--unknown-color)";
@@ -2006,7 +2099,7 @@ function App() {
   }, [showPackageResults]);
 
   React.useEffect(() => {
-    if (!showPackageResults) return;
+    if (!showPackageResults || graphCollapsed) return;
     const graphDeps = mergePackageChainDeps(deps, packageChainDeps);
     const direct = {};
     graphDeps.forEach((d) => {
@@ -2022,6 +2115,7 @@ function App() {
     buildGraph(graphDeps, rootKey || submittedName, submittedVersion, direct, rootRisk, rootOsvStatus);
   }, [
     showPackageResults,
+    graphCollapsed,
     deps,
     packageChainDeps,
     packageChainLoading,
@@ -3869,34 +3963,34 @@ function App() {
 
     const linkDistance = chainExpandedGraph
       ? compactGraph
-        ? 74
+        ? 86
         : largeGraph
-          ? 112
-          : 146
+          ? 132
+          : 164
       : largeGraph
-        ? 90
+        ? 118
         : compactGraph
-          ? 44
-          : 60;
+          ? 54
+          : 80;
     const chargeStrength = chainExpandedGraph
       ? largeGraph
-        ? -340
+        ? -440
         : compactGraph
-          ? -130
-          : -360
+          ? -170
+          : -440
       : largeGraph
-        ? -230
+        ? -380
         : compactGraph
-          ? -75
-          : -120;
+          ? -100
+          : -190;
     const collisionRadius = (d) => {
-      if (chainExpandedGraph && d.labelBaseVisible && !compactGraph) {
+      if (d.labelBaseVisible && !compactGraph) {
         return Math.min(
-          largeGraph ? 64 : 88,
-          Math.max(d.root ? 42 : 38, String(d.id || "").length * (largeGraph ? 1.8 : 2.3)),
+          largeGraph ? 72 : 94,
+          Math.max(d.root ? 44 : 40, String(d.id || "").length * (largeGraph ? 2.0 : 2.4)),
         );
       }
-      return largeGraph ? 24 : compactGraph ? 15 : 20;
+      return largeGraph ? 30 : compactGraph ? 17 : 25;
     };
     // Pick the label side with hysteresis: the perpetual float jitter keeps
     // nodes near the midline (always, for a single node) oscillating across
@@ -3933,7 +4027,7 @@ function App() {
         "charge",
         d3.forceManyBody().strength(chargeStrength),
       )
-      .force("collide", d3.forceCollide(collisionRadius).iterations(chainExpandedGraph ? 3 : 1))
+      .force("collide", d3.forceCollide(collisionRadius).iterations(chainExpandedGraph ? 3 : 2))
       .force("center", d3.forceCenter(width / 2, height / 2));
 
     if (!steadyGraph) {
@@ -3971,7 +4065,8 @@ function App() {
           "graph-node",
           d.root ? "graph-node-root" : "",
           d.risk ? `risk-${d.risk}` : "",
-          !d.risk && isUnresolvedOsvStatus(d.osvStatus)
+          isUnscoredVulnerable(d) ? "risk-advisory" : "",
+          !d.risk && !isUnscoredVulnerable(d) && isUnresolvedOsvStatus(d.osvStatus)
             ? "risk-unknown"
             : "",
         ]
@@ -3984,47 +4079,15 @@ function App() {
       .attr("r", (d) => (largeGraph && !d.root && !d.risk ? 6 : 8))
       .attr("fill", (d) => fillFor(d))
       .attr("stroke", (d) => (d.root ? "#00e5ff" : "#fff"))
-      .on("click", (_, d) => {
+      .style("cursor", "pointer")
+      .on("click", (event, d) => {
+        // Pivot into an in-app analysis of the clicked package, matching the
+        // label click and dependency-list behavior. Registry links stay
+        // available from the dependency list and security panels.
+        event?.stopPropagation();
         const at = d.id.lastIndexOf("@");
-        if (at <= 0) return;
-        const pkg = d.id.slice(0, at);
-        const ver = d.id.slice(at + 1);
-        let url = "";
-        switch (submittedManager || manager) {
-          case "npm":
-            url = `https://www.npmjs.com/package/${pkg}/v/${ver}`;
-            break;
-          case "pypi":
-            url = `https://pypi.org/project/${pkg}/${ver}/`;
-            break;
-          case "go":
-            url = `https://pkg.go.dev/${pkg}@${ver}`;
-            break;
-          case "maven": {
-            const parts = pkg.split(":");
-            if (parts.length === 2) {
-              url = `https://search.maven.org/artifact/${parts[0]}/${parts[1]}/${ver}/jar`;
-            }
-            break;
-          }
-          case "cargo":
-            url = `https://crates.io/crates/${pkg}/${ver}`;
-            break;
-          case "rubygems":
-            url = `https://rubygems.org/gems/${pkg}/versions/${ver}`;
-            break;
-          case "nuget":
-            url = `https://www.nuget.org/packages/${pkg}/${ver}`;
-            break;
-          case "composer":
-            url = `https://packagist.org/packages/${pkg}`;
-            break;
-          default:
-            url = "";
-        }
-        if (url) {
-          window.open(url, "_blank");
-        }
+        if (at <= 0 || d.root) return;
+        pivotSearch({ name: d.id.slice(0, at), version: d.id.slice(at + 1) });
       });
 
     const drag = d3
@@ -4054,7 +4117,8 @@ function App() {
                 d.maxScore ? ` (${Number(d.maxScore).toFixed(1)})` : ""
               }`
             : "";
-        return `${d.id} - ${osvStatusLabel(d.osvStatus)}${severity}`;
+        const action = d.root ? "" : ". Click to analyze this package";
+        return `${d.id} - ${osvStatusLabel(d.osvStatus)}${severity}${action}`;
       });
 
     const pivotGraphLabel = (event, d) => {
@@ -5531,11 +5595,154 @@ function App() {
         !/[<>=*|,\s^~]/.test(versionValue),
     );
   };
+  const parseSemverish = (value) => {
+    const text = String(value || "")
+      .trim()
+      .replace(/^v(?=\d)/i, "");
+    const m = text.match(
+      /^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/,
+    );
+    if (!m) return null;
+    return {
+      major: Number(m[1]),
+      minor: m[2] === undefined ? 0 : Number(m[2]),
+      patch: m[3] === undefined ? 0 : Number(m[3]),
+      prerelease: m[4] || "",
+      minorSpecified: m[2] !== undefined,
+      patchSpecified: m[3] !== undefined,
+    };
+  };
+  const compareSemverish = (a, b) => {
+    if (a.major !== b.major) return a.major - b.major;
+    if (a.minor !== b.minor) return a.minor - b.minor;
+    if (a.patch !== b.patch) return a.patch - b.patch;
+    if (!a.prerelease && b.prerelease) return 1;
+    if (a.prerelease && !b.prerelease) return -1;
+    return a.prerelease.localeCompare(b.prerelease);
+  };
+  const versionSatisfiesComparator = (version, comparatorText) => {
+    let text = comparatorText.trim();
+    if (!text || text === "*" || /^[xX]$/.test(text)) return !version.prerelease;
+    let op = "=";
+    const opMatch = text.match(/^(\^|~|>=|<=|>|<|==|=)/);
+    if (opMatch) {
+      op = opMatch[1] === "==" ? "=" : opMatch[1];
+      text = text.slice(opMatch[1].length).trim();
+    }
+    const wildcard = /[xX*]/.test(text);
+    const cleaned = text.replace(/[.-]?[xX*].*$/, "");
+    const target = parseSemverish(cleaned || "0");
+    if (!target) return false;
+    if (version.prerelease && !target.prerelease) return false;
+    const cmp = compareSemverish(version, target);
+    switch (op) {
+      case ">":
+        return cmp > 0;
+      case ">=":
+        return cmp >= 0;
+      case "<":
+        return cmp < 0;
+      case "<=":
+        return cmp <= 0;
+      case "~":
+        if (cmp < 0) return false;
+        return (
+          version.major === target.major &&
+          (!target.minorSpecified || version.minor === target.minor)
+        );
+      case "^":
+        if (cmp < 0) return false;
+        if (target.major > 0) return version.major === target.major;
+        if (target.minor > 0) {
+          return version.major === 0 && version.minor === target.minor;
+        }
+        return (
+          version.major === 0 &&
+          version.minor === 0 &&
+          version.patch === target.patch
+        );
+      default:
+        if (wildcard || !target.patchSpecified) {
+          if (!cleaned) return !version.prerelease;
+          if (!target.minorSpecified) return version.major === target.major;
+          return (
+            version.major === target.major && version.minor === target.minor
+          );
+        }
+        return cmp === 0;
+    }
+  };
+  const versionSatisfiesRange = (versionText, rangeText) => {
+    const version = parseSemverish(versionText);
+    if (!version) return false;
+    return String(rangeText || "")
+      .split("||")
+      .some((clause) => {
+        const trimmed = clause.trim().replace(/,/g, " ");
+        if (!trimmed) return false;
+        const hyphen = trimmed.match(/^(\S+)\s+-\s+(\S+)$/);
+        const comparators = hyphen
+          ? [`>=${hyphen[1]}`, `<=${hyphen[2]}`]
+          : trimmed.split(/\s+/);
+        return comparators.every((comparator) =>
+          versionSatisfiesComparator(version, comparator),
+        );
+      });
+  };
+  const githubRepoVersionRangeResolvable = (pkg) =>
+    Boolean(
+      pkg?.manager &&
+        pkg?.name &&
+        normalizeGithubRepoVersion(pkg?.version) &&
+        !githubRepoHasExactVersion(pkg),
+    );
+  // Resolve a version-range spec (e.g. "^2.2.1") to the newest published
+  // version satisfying it, so ranged SBOM packages can join OSV checks and
+  // dependency-chain resolution.
+  const resolveGithubRepoVersionRange = async (pkg, signal) => {
+    const identityKey = githubRepoPackageIdentityKey(pkg);
+    if (!identityKey) return "";
+    const cache = githubRepoResolvedVersionsRef.current;
+    if (cache.has(identityKey)) return cache.get(identityKey) || "";
+    let resolved = "";
+    try {
+      const params = new URLSearchParams({
+        manager: pkg.manager,
+        name: pkg.name,
+      });
+      if (pkg.namespace) params.set("namespace", pkg.namespace);
+      const resp = await fetch(`${apiOrigin}/api/versions?${params}`, {
+        signal,
+      });
+      if (resp.ok) {
+        const info = await resp.json();
+        const range = normalizeGithubRepoVersion(pkg.version);
+        const candidates = (Array.isArray(info.versions) ? info.versions : [])
+          .filter((value) => parseSemverish(value))
+          .sort((a, b) => compareSemverish(parseSemverish(b), parseSemverish(a)));
+        resolved =
+          candidates.find((value) => versionSatisfiesRange(value, range)) || "";
+      }
+    } catch (err) {
+      resolved = "";
+    }
+    if (!signal?.aborted) cache.set(identityKey, resolved);
+    return resolved;
+  };
+  // Exact version when the SBOM has one; otherwise the range resolution
+  // result (empty string until resolved).
+  const githubRepoEffectiveVersion = (pkg) => {
+    if (githubRepoHasExactVersion(pkg)) {
+      return normalizeGithubRepoVersion(pkg.version);
+    }
+    const identityKey = githubRepoPackageIdentityKey(pkg);
+    return githubRepoResolvedVersionsRef.current.get(identityKey) || "";
+  };
   const githubRepoDependencyApiUrl = (pkg, recursive = true) => {
-    if (!githubRepoHasExactVersion(pkg)) return "";
+    const versionValue = githubRepoEffectiveVersion(pkg);
+    if (!versionValue || !pkg?.manager || !pkg?.name) return "";
     const enc = encodeURIComponent;
     const managerKey = pkg.manager;
-    const versionValue = normalizeGithubRepoVersion(pkg.version);
     const base = `${apiOrigin}/api/dependencies/${enc(managerKey)}`;
     let path = "";
     if (managerKey === "go") {
@@ -5734,8 +5941,8 @@ function App() {
     })
     .join("\n");
   const githubRepoPackageOsvTarget = (pkg) => {
-    const versionValue = normalizeGithubRepoVersion(pkg?.version);
-    if (!githubRepoHasExactVersion(pkg)) {
+    const versionValue = githubRepoEffectiveVersion(pkg);
+    if (!versionValue) {
       return null;
     }
     const packageName = formatPackage(
@@ -7010,7 +7217,7 @@ function App() {
         "OSV unresolved",
       );
     }
-    if (!githubRepoHasExactVersion(pkg)) {
+    if (!githubRepoEffectiveVersion(pkg)) {
       return e(
         "span",
         {
@@ -7315,7 +7522,11 @@ function App() {
         nextDeps[rootKey] = {
           manager: pkg.manager,
           rootPackageName,
-          rootVersion: pkg.version || "",
+          rootVersion:
+            data.resolved_version ||
+            githubRepoEffectiveVersion(pkg) ||
+            pkg.version ||
+            "",
           dependencies: data.dependencies || {},
           parents: data.parents || {},
           errors: data.errors || {},
@@ -7400,116 +7611,149 @@ function App() {
       };
     }
 
-    const initialStatus = {};
-    const groupedChecks = new Map();
-    packages.forEach((pkg) => {
-      const key = githubRepoPackageKey(pkg);
-      const identityKey = githubRepoPackageIdentityKey(pkg);
-      const target = githubRepoPackageOsvTarget(pkg);
-      if (!key || !target) return;
-      const cacheKey = versionRiskKey(
-        target.manager,
-        target.packageName,
-        target.version,
+    const run = async () => {
+      // Resolve ranged version specs to concrete versions first, so those
+      // packages join OSV coloring and dependency-chain resolution.
+      const ranged = packages.filter(
+        (pkg) =>
+          githubRepoVersionRangeResolvable(pkg) &&
+          !githubRepoResolvedVersionsRef.current.has(
+            githubRepoPackageIdentityKey(pkg),
+          ),
       );
-      const cached = versionRiskCacheRef.current.get(cacheKey);
-      if (cached) {
-        initialStatus[key] = cached;
-        if (identityKey) initialStatus[identityKey] = cached;
+      if (ranged.length > 0) {
+        setGithubRepoVulnLoading(true);
+        let resolvedCount = 0;
+        setGithubRepoVulnProgress(
+          `Resolving version ranges 0/${ranged.length}`,
+        );
+        await mapLimit(ranged, 6, async (pkg) => {
+          if (cancelled) return;
+          await resolveGithubRepoVersionRange(pkg);
+          resolvedCount += 1;
+          if (
+            !cancelled &&
+            (resolvedCount % 5 === 0 || resolvedCount === ranged.length)
+          ) {
+            setGithubRepoVulnProgress(
+              `Resolving version ranges ${resolvedCount}/${ranged.length}`,
+            );
+          }
+        });
+        if (cancelled) return;
+        setGithubRepoRangeResolutionTick((tick) => tick + 1);
+      }
+
+      const initialStatus = {};
+      const groupedChecks = new Map();
+      packages.forEach((pkg) => {
+        const key = githubRepoPackageKey(pkg);
+        const identityKey = githubRepoPackageIdentityKey(pkg);
+        const target = githubRepoPackageOsvTarget(pkg);
+        if (!key || !target) return;
+        const cacheKey = versionRiskKey(
+          target.manager,
+          target.packageName,
+          target.version,
+        );
+        const cached = versionRiskCacheRef.current.get(cacheKey);
+        if (cached) {
+          initialStatus[key] = cached;
+          if (identityKey) initialStatus[identityKey] = cached;
+          return;
+        }
+        if (!groupedChecks.has(cacheKey)) {
+          groupedChecks.set(cacheKey, {
+            ...target,
+            cacheKey,
+            keys: [],
+          });
+        }
+        groupedChecks.get(cacheKey).keys.push(key);
+        if (identityKey && identityKey !== key) {
+          groupedChecks.get(cacheKey).keys.push(identityKey);
+        }
+      });
+
+      const checks = Array.from(groupedChecks.values());
+      if (cancelled) return;
+      setGithubRepoVulnStatus(initialStatus);
+      if (checks.length === 0) {
+        setGithubRepoVulnLoading(false);
+        setGithubRepoVulnProgress(
+          Object.keys(initialStatus).length > 0
+            ? "OSV status loaded from cache"
+            : "No resolvable package versions available for OSV coloring",
+        );
         return;
       }
-      if (!groupedChecks.has(cacheKey)) {
-        groupedChecks.set(cacheKey, {
-          ...target,
-          cacheKey,
-          keys: [],
-        });
-      }
-      groupedChecks.get(cacheKey).keys.push(key);
-      if (identityKey && identityKey !== key) {
-        groupedChecks.get(cacheKey).keys.push(identityKey);
-      }
-    });
 
-    const checks = Array.from(groupedChecks.values());
-    setGithubRepoVulnStatus(initialStatus);
-    if (checks.length === 0) {
-      setGithubRepoVulnLoading(false);
+      setGithubRepoVulnLoading(true);
       setGithubRepoVulnProgress(
-        Object.keys(initialStatus).length > 0
-          ? "OSV status loaded from cache"
-          : "No exact package versions available for OSV coloring",
+        `Checking OSV for 0/${checks.length} versioned packages`,
       );
-      return () => {
-        cancelled = true;
+
+      const accumulatedStatus = { ...initialStatus };
+      let completed = 0;
+      const commitStatus = (force = false) => {
+        if (cancelled) return;
+        if (force || completed % 25 === 0) {
+          setGithubRepoVulnStatus({ ...accumulatedStatus });
+        }
+        setGithubRepoVulnProgress(
+          `Checking OSV for ${completed}/${checks.length} versioned packages`,
+        );
       };
-    }
 
-    setGithubRepoVulnLoading(true);
-    setGithubRepoVulnProgress(
-      `Checking OSV for 0/${checks.length} versioned packages`,
-    );
-
-    const accumulatedStatus = { ...initialStatus };
-    let completed = 0;
-    const commitStatus = (force = false) => {
+      await mapLimit(checks, 6, async (item) => {
+        let record;
+        const result = await queryOsvVulns(
+          item.manager,
+          item.packageName,
+          item.version,
+        );
+        const status = result.status || {};
+        if (status.status === "vulnerable" || status.status === "no_advisory") {
+          record = summarizeVersionRisk(result.vulns || []);
+          versionRiskCacheRef.current.set(item.cacheKey, record);
+        } else {
+          record = {
+            status: status.status || "unknown",
+            score: 0,
+            risk: null,
+            advisoryCount: 0,
+            advisoryIds: [],
+            cveIds: [],
+            error: status.error || "",
+          };
+        }
+        item.keys.forEach((key) => {
+          accumulatedStatus[key] = record;
+        });
+        completed += 1;
+        commitStatus(false);
+        return record;
+      });
       if (cancelled) return;
-      if (force || completed % 25 === 0) {
-        setGithubRepoVulnStatus({ ...accumulatedStatus });
-      }
+      setGithubRepoVulnStatus({ ...accumulatedStatus });
+      setGithubRepoVulnLoading(false);
+      const vulnerable = Object.values(accumulatedStatus).filter(
+        (record) => record.status === "vulnerable",
+      ).length;
       setGithubRepoVulnProgress(
-        `Checking OSV for ${completed}/${checks.length} versioned packages`,
+        vulnerable > 0
+          ? `${vulnerable} vulnerable package${vulnerable === 1 ? "" : "s"} found by OSV`
+          : `OSV checked ${completed} versioned package${completed === 1 ? "" : "s"}`,
       );
     };
 
-    mapLimit(checks, 6, async (item) => {
-      let record;
-      const result = await queryOsvVulns(
-        item.manager,
-        item.packageName,
-        item.version,
-      );
-      const status = result.status || {};
-      if (status.status === "vulnerable" || status.status === "no_advisory") {
-        record = summarizeVersionRisk(result.vulns || []);
-        versionRiskCacheRef.current.set(item.cacheKey, record);
-      } else {
-        record = {
-          status: status.status || "unknown",
-          score: 0,
-          risk: null,
-          advisoryCount: 0,
-          advisoryIds: [],
-          cveIds: [],
-          error: status.error || "",
-        };
-      }
-      item.keys.forEach((key) => {
-        accumulatedStatus[key] = record;
-      });
-      completed += 1;
-      commitStatus(false);
-      return record;
-    })
-      .catch((err) => {
-        if (cancelled) return;
-        const message =
-          err && err.message ? err.message : "Unable to resolve repository OSV status.";
-        setGithubRepoVulnProgress(message);
-      })
-      .finally(() => {
-        if (cancelled) return;
-        setGithubRepoVulnStatus({ ...accumulatedStatus });
-        setGithubRepoVulnLoading(false);
-        const vulnerable = Object.values(accumulatedStatus).filter(
-          (record) => record.status === "vulnerable",
-        ).length;
-        setGithubRepoVulnProgress(
-          vulnerable > 0
-            ? `${vulnerable} vulnerable package${vulnerable === 1 ? "" : "s"} found by OSV`
-            : `OSV checked ${completed} versioned package${completed === 1 ? "" : "s"}`,
-        );
-      });
+    run().catch((err) => {
+      if (cancelled) return;
+      const message =
+        err && err.message ? err.message : "Unable to resolve repository OSV status.";
+      setGithubRepoVulnLoading(false);
+      setGithubRepoVulnProgress(message);
+    });
 
     return () => {
       cancelled = true;
@@ -7741,7 +7985,7 @@ function App() {
             ? savedParentPosition.y * scaleY
             : 0;
         const angle = (hashGraphNode(d.id) / 9973) * Math.PI * 2;
-        const distance = d.transitiveDep ? 34 : d.managerGroup ? 86 : 52;
+        const distance = d.transitiveDep ? 48 : d.managerGroup ? 100 : 64;
         d.x = currentParentPosition || savedParentPosition
           ? parentX + Math.cos(angle) * distance
           : width / 2 + Math.cos(angle) * distance;
@@ -7860,9 +8104,9 @@ function App() {
           .forceLink(links)
           .id((d) => d.id)
           .distance((d) => {
-            if (d.kind === "manager") return 108;
-            if (d.kind === "transitive") return 32;
-            return 44;
+            if (d.kind === "manager") return 120;
+            if (d.kind === "transitive") return 46;
+            return 60;
           })
           .strength(0.72),
       )
@@ -7871,10 +8115,10 @@ function App() {
         d3.forceManyBody().strength((d) => {
           const base =
             graphPackageLikeCount > 1200
-              ? -18
+              ? -26
               : graphPackageLikeCount > 80
-                ? -34
-                : -74;
+                ? -48
+                : -95;
           return d.anchorX !== undefined && softAnchorGraph ? base * 0.35 : base;
         }),
       )
@@ -7883,8 +8127,9 @@ function App() {
         d3
           .forceCollide()
           .radius((d) =>
-            d.root ? 26 : d.managerGroup ? 20 : d.transitiveDep ? 9 : 13,
-          ),
+            d.root ? 28 : d.managerGroup ? 22 : d.transitiveDep ? 12 : 16,
+          )
+          .iterations(2),
       )
       .force(
         "x",
@@ -7929,12 +8174,12 @@ function App() {
 
     const tickCount =
       graphPackageLikeCount > 1600
-        ? 65
-        : graphPackageLikeCount > 900
         ? 80
+        : graphPackageLikeCount > 900
+        ? 100
         : graphPackageLikeCount > 250
-          ? 110
-          : 150;
+          ? 140
+          : 180;
     const driftLimitFor = (d) => {
       if (d.root) return 3;
       if (d.managerGroup) return 7;
@@ -8840,64 +9085,65 @@ function App() {
     loading &&
       e(
         "div",
-        { className: "loading-overlay" },
+        { className: "loading-overlay", role: "status", "aria-live": "polite" },
         e(
           "div",
-          null,
-          e("br"),
-          e("br"),
-          e("br"),
-          "Loading...".split("").map((ch, idx) =>
-            e(
-              "span",
-              {
-                key: idx,
-                className: "bounce-char",
-                style: { animationDelay: `${idx * 0.1}s` },
-              },
-              ch,
-            ),
-          ),
-        ),
-        status &&
+          { className: "loading-card" },
+          e("span", { className: "loading-spinner", "aria-hidden": "true" }),
           e(
             "div",
-            { className: "loading-status fade", key: statusKey },
-            status,
+            { className: "loading-title" },
+            "Loading...".split("").map((ch, idx) =>
+              e(
+                "span",
+                {
+                  key: idx,
+                  className: "bounce-char",
+                  style: { animationDelay: `${idx * 0.1}s` },
+                },
+                ch,
+              ),
+            ),
           ),
-        e(
-          "div",
-          { className: "loading-actions" },
-          consoleLines.length > 0 &&
+          status &&
+            e(
+              "div",
+              { className: "loading-status fade", key: statusKey },
+              status,
+            ),
+          e(
+            "div",
+            { className: "loading-actions" },
+            consoleLines.length > 0 &&
+              e(
+                "button",
+                {
+                  className: "console-toggle",
+                  onClick: () => setShowConsole((v) => !v),
+                },
+                showConsole ? "Hide Console" : "Show Console",
+              ),
             e(
               "button",
               {
-                className: "console-toggle",
-                onClick: () => setShowConsole((v) => !v),
+                className: "cancel-button",
+                onClick: cancelFetch,
               },
-              showConsole ? "Hide Console" : "Show Console",
+              "Cancel",
             ),
-          e(
-            "button",
-            {
-              className: "cancel-button",
-              onClick: cancelFetch,
-            },
-            "Cancel",
           ),
+          consoleLines.length > 0 &&
+            showConsole &&
+            e(
+              "pre",
+              {
+                ref: consoleBoxRef,
+                className: "console-box",
+                "aria-label": "Request console output",
+              },
+              consoleLines.join("\n"),
+            ),
         ),
-        consoleLines.length > 0 &&
-          showConsole &&
-          e(
-            "pre",
-            {
-              ref: consoleBoxRef,
-              className: "console-box",
-              "aria-live": "polite",
-              "aria-label": "Request console output",
-            },
-            consoleLines.join("\n"),
-          ),
       ),
 
     e(
@@ -9379,6 +9625,30 @@ function App() {
               { className: "search-helper-copy" },
             "Search by advisory ID to see affected packages, references, severity, and package-analysis deep links.",
             ),
+            !cveLoading &&
+              !cveResult &&
+              e(
+                "div",
+                { className: "sample-suggestions" },
+                e(
+                  "span",
+                  { className: "sample-suggestions-label" },
+                  "Try a well-known advisory:",
+                ),
+                sampleAdvisories.map((sample) =>
+                  e(
+                    "button",
+                    {
+                      key: sample.id,
+                      type: "button",
+                      className: "package-suggestion-btn",
+                      title: sample.title,
+                      onClick: () => fetchCve(null, sample.id),
+                    },
+                    sample.label,
+                  ),
+                ),
+              ),
           ),
           e(
             "div",
@@ -9422,6 +9692,31 @@ function App() {
                 { className: "search-helper-copy" },
                 "Import a GitHub dependency graph, then choose any supported package for deeper analysis.",
               ),
+              !githubRepoLoading &&
+                !githubRepoResult &&
+                e(
+                  "div",
+                  { className: "sample-suggestions" },
+                  e(
+                    "span",
+                    { className: "sample-suggestions-label" },
+                    "Try a popular repository:",
+                  ),
+                  sampleRepositories.map((sample) =>
+                    e(
+                      "button",
+                      {
+                        key: sample.repo,
+                        type: "button",
+                        className: "package-suggestion-btn",
+                        title: sample.title,
+                        onClick: () =>
+                          importGithubRepoDependencies(null, sample.repo),
+                      },
+                      sample.repo,
+                    ),
+                  ),
+                ),
               githubRepoError &&
                 e("div", { className: "github-import-error" }, githubRepoError),
               githubRepoResult &&
@@ -10228,8 +10523,32 @@ function App() {
             "div",
             { className: "column graph-column" },
           e(
+            "button",
+            {
+              type: "button",
+              className: "graph-collapse-toggle",
+              "aria-expanded": !graphCollapsed,
+              onClick: () => setGraphCollapsed((v) => !v),
+            },
+            e("span", { className: "graph-collapse-title" }, "Dependency graph"),
+            e(
+              "span",
+              { className: "graph-collapse-hint" },
+              graphCollapsed ? "Show" : "Hide",
+            ),
+            e(
+              "span",
+              { className: "graph-collapse-chevron", "aria-hidden": "true" },
+              graphCollapsed ? "▸" : "▾",
+            ),
+          ),
+          e(
             "div",
-            { className: "graph-container" },
+            {
+              className: `graph-container${
+                graphCollapsed ? " collapsed" : ""
+              }`,
+            },
             e("svg", { id: "graph" }),
             e(
               "div",
