@@ -245,19 +245,75 @@ type githubSBOMResponse struct {
 	} `json:"sbom"`
 }
 
-func fetchAllDeps(ctx context.Context, m manager.Manager, ns, name, version string, recursive bool, visited map[string]struct{}, parent string, pm string, cache *redisCache, ttl time.Duration) (map[string]interface{}, map[string][]string, []string, error) {
+// maxConcurrentDepFetches bounds in-flight registry requests during a
+// recursive dependency crawl.
+const maxConcurrentDepFetches = 12
 
-	deps, repo, err := m.Dependencies(ctx, ns, name, version)
+// depWalker coordinates a parallel recursive dependency crawl. The semaphore
+// only guards the registry call itself, never held while waiting on child
+// walks, so recursion cannot deadlock. visited dedupes package@version nodes
+// across all branches of the tree.
+type depWalker struct {
+	m       manager.Manager
+	pm      string
+	cache   *redisCache
+	ttl     time.Duration
+	sem     chan struct{}
+	mu      sync.Mutex
+	visited map[string]struct{}
+}
+
+func fetchAllDeps(ctx context.Context, m manager.Manager, ns, name, version string, recursive bool, pm string, cache *redisCache, ttl time.Duration) (map[string]interface{}, map[string][]string, []string, error) {
+	w := &depWalker{
+		m:       m,
+		pm:      pm,
+		cache:   cache,
+		ttl:     ttl,
+		sem:     make(chan struct{}, maxConcurrentDepFetches),
+		visited: map[string]struct{}{},
+	}
+	return w.walk(ctx, ns, name, version, recursive, "")
+}
+
+func (w *depWalker) fetchDependencies(ctx context.Context, ns, name, version string) (map[string]interface{}, string, error) {
+	w.sem <- struct{}{}
+	defer func() { <-w.sem }()
+	return w.m.Dependencies(ctx, ns, name, version)
+}
+
+// markVisited reports whether id was newly recorded; false means another
+// branch already claimed the node.
+func (w *depWalker) markVisited(id string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if _, ok := w.visited[id]; ok {
+		return false
+	}
+	w.visited[id] = struct{}{}
+	return true
+}
+
+func (w *depWalker) cacheResult(ctx context.Context, ns, name, version string, recursive bool, res map[string]interface{}) {
+	if w.cache == nil {
+		return
+	}
+	if data, err := json.Marshal(res); err == nil {
+		w.cache.set(ctx, cacheKey(w.pm, ns, name, version, recursive, false, false), data, w.ttl)
+	}
+}
+
+func (w *depWalker) walk(ctx context.Context, ns, name, version string, recursive bool, parent string) (map[string]interface{}, map[string][]string, []string, error) {
+	deps, repo, err := w.fetchDependencies(ctx, ns, name, version)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	repositories := map[string]string{}
 	if repo == "" {
-		pkg := formatPackage(pm, ns, name)
-		repo = repoFromPackage(pm, pkg)
+		pkg := formatPackage(w.pm, ns, name)
+		repo = repoFromPackage(w.pm, pkg)
 	}
 	if repo != "" {
-		repositories[formatPackage(pm, ns, name)] = repo
+		repositories[formatPackage(w.pm, ns, name)] = repo
 	}
 	resolvedVersion, _ := deps["resolved_version"].(string)
 	if resolvedVersion == "" {
@@ -265,19 +321,29 @@ func fetchAllDeps(ctx context.Context, m manager.Manager, ns, name, version stri
 	}
 	if !recursive {
 		res := map[string]interface{}{"dependencies": deps["dependencies"], "repositories": repositories, "resolved_version": resolvedVersion}
-		if cache != nil {
-			if data, err := json.Marshal(res); err == nil {
-				cache.set(ctx, cacheKey(pm, ns, name, version, recursive, false, false), data, ttl)
-			}
-		}
+		w.cacheResult(ctx, ns, name, version, recursive, res)
 		return res, nil, nil, nil
 	}
 	depMap, _ := deps["dependencies"].(map[string]interface{})
 	result := make(map[string]interface{})
 	parents := make(map[string][]string)
 	var errs []string
+
+	// Each unvisited child is walked in its own goroutine; results are
+	// merged only after all children finish, so the maps below are never
+	// accessed concurrently.
+	type childWalk struct {
+		pkg     string
+		version string
+		deps    map[string]interface{}
+		parents map[string][]string
+		errs    []string
+		err     error
+	}
+	var wg sync.WaitGroup
+	children := make([]*childWalk, 0, len(depMap))
 	for k, v := range depMap {
-		vs := dependencyVersion(pm, fmt.Sprint(v))
+		vs := dependencyVersion(w.pm, fmt.Sprint(v))
 		result[k] = vs
 		if _, ok := parents[k]; !ok {
 			parents[k] = []string{}
@@ -285,34 +351,42 @@ func fetchAllDeps(ctx context.Context, m manager.Manager, ns, name, version stri
 		if !contains(parents[k], parent) {
 			parents[k] = append(parents[k], parent)
 		}
-		id := fmt.Sprintf("%s:%s:%s", pm, k, vs)
-		if _, ok := visited[id]; ok {
+		id := fmt.Sprintf("%s:%s:%s", w.pm, k, vs)
+		if !w.markVisited(id) {
 			continue
 		}
-		visited[id] = struct{}{}
-		dns, dname := splitDep(k)
-		sub, subParents, subErrs, err := fetchAllDeps(ctx, m, dns, dname, vs, recursive, visited, k, pm, cache, ttl)
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s@%s: %v", k, vs, err))
+		child := &childWalk{pkg: k, version: vs}
+		children = append(children, child)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			dns, dname := splitDep(child.pkg)
+			child.deps, child.parents, child.errs, child.err = w.walk(ctx, dns, dname, child.version, recursive, child.pkg)
+		}()
+	}
+	wg.Wait()
+	for _, child := range children {
+		if child.err != nil {
+			errs = append(errs, fmt.Sprintf("%s@%s: %v", child.pkg, child.version, child.err))
 			continue
 		}
-		errs = append(errs, subErrs...)
-		subMap, _ := sub["dependencies"].(map[string]interface{})
-		if subResolved, _ := sub["resolved_version"].(string); subResolved != "" {
-			result[k] = subResolved
+		errs = append(errs, child.errs...)
+		subMap, _ := child.deps["dependencies"].(map[string]interface{})
+		if subResolved, _ := child.deps["resolved_version"].(string); subResolved != "" {
+			result[child.pkg] = subResolved
 		}
 		for sk, sv := range subMap {
 			if _, ok := result[sk]; !ok {
 				result[sk] = sv
 			}
 		}
-		subRepos, _ := sub["repositories"].(map[string]string)
+		subRepos, _ := child.deps["repositories"].(map[string]string)
 		for pk, rv := range subRepos {
 			if _, ok := repositories[pk]; !ok {
 				repositories[pk] = rv
 			}
 		}
-		for sp, ps := range subParents {
+		for sp, ps := range child.parents {
 			if _, ok := parents[sp]; !ok {
 				parents[sp] = []string{}
 			}
@@ -327,11 +401,7 @@ func fetchAllDeps(ctx context.Context, m manager.Manager, ns, name, version stri
 	if len(errs) > 0 {
 		res["errors"] = errs
 	}
-	if cache != nil {
-		if data, err := json.Marshal(res); err == nil {
-			cache.set(ctx, cacheKey(pm, ns, name, version, recursive, false, false), data, ttl)
-		}
-	}
+	w.cacheResult(ctx, ns, name, version, recursive, res)
 	return res, parents, errs, nil
 }
 
@@ -495,6 +565,27 @@ func aliasIDFromURL(u string) string {
 	return ""
 }
 
+// osvSem bounds concurrent requests to api.osv.dev across all in-flight
+// lookups. Tokens are only held for a single request/decode round trip, never
+// while waiting on other work, so nested callers cannot deadlock.
+var osvSem = make(chan struct{}, 16)
+
+// doOSVJSON performs an OSV API request under the shared concurrency cap and
+// decodes the JSON response into out.
+func doOSVJSON(req *http.Request, out interface{}) error {
+	osvSem <- struct{}{}
+	defer func() { <-osvSem }()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("osv.dev returned status %d", resp.StatusCode)
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
 // fetchVulnByID retrieves a vulnerability entry from OSV by advisory ID.
 func fetchVulnByID(ctx context.Context, id string, cache *redisCache, ttl time.Duration) (map[string]interface{}, error) {
 	var key string
@@ -512,16 +603,8 @@ func fetchVulnByID(ctx context.Context, id string, cache *redisCache, ttl time.D
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("osv.dev returned status %d", resp.StatusCode)
-	}
 	var out map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := doOSVJSON(req, &out); err != nil {
 		return nil, err
 	}
 	if cache != nil {
@@ -544,56 +627,64 @@ func vulnHasSeverity(v map[string]interface{}) bool {
 
 // enrichVulnSeverities fills in missing severity data by resolving CVE/GHSA
 // aliases against OSV, since some advisories only carry severity on an alias.
+// Vulns are enriched in parallel; each goroutine only mutates its own vuln
+// map, and total OSV traffic stays bounded by osvSem.
 func enrichVulnSeverities(ctx context.Context, vulns []map[string]interface{}, cache *redisCache, ttl time.Duration) {
 	const maxAliasLookupsPerVuln = 3
+	var wg sync.WaitGroup
 	for _, v := range vulns {
 		if vulnHasSeverity(v) {
 			continue
 		}
-		var aliases []string
-		seen := map[string]struct{}{}
-		add := func(id string) {
-			if id == "" || !osvAliasIDPattern.MatchString(id) {
-				return
-			}
-			if _, dup := seen[id]; dup {
-				return
-			}
-			seen[id] = struct{}{}
-			aliases = append(aliases, id)
-		}
-		if a, ok := v["aliases"].([]interface{}); ok {
-			for _, idv := range a {
-				if s, ok := idv.(string); ok {
-					add(s)
+		wg.Add(1)
+		go func(v map[string]interface{}) {
+			defer wg.Done()
+			var aliases []string
+			seen := map[string]struct{}{}
+			add := func(id string) {
+				if id == "" || !osvAliasIDPattern.MatchString(id) {
+					return
 				}
+				if _, dup := seen[id]; dup {
+					return
+				}
+				seen[id] = struct{}{}
+				aliases = append(aliases, id)
 			}
-		}
-		if refs, ok := v["references"].([]interface{}); ok {
-			for _, rv := range refs {
-				if m, ok := rv.(map[string]interface{}); ok {
-					if u, ok := m["url"].(string); ok {
-						add(aliasIDFromURL(u))
+			if a, ok := v["aliases"].([]interface{}); ok {
+				for _, idv := range a {
+					if s, ok := idv.(string); ok {
+						add(s)
 					}
 				}
 			}
-		}
-		lookups := 0
-		for _, id := range aliases {
-			if lookups >= maxAliasLookupsPerVuln {
-				break
+			if refs, ok := v["references"].([]interface{}); ok {
+				for _, rv := range refs {
+					if m, ok := rv.(map[string]interface{}); ok {
+						if u, ok := m["url"].(string); ok {
+							add(aliasIDFromURL(u))
+						}
+					}
+				}
 			}
-			lookups++
-			aliasVuln, err := fetchVulnByID(ctx, id, cache, ttl)
-			if err != nil {
-				continue
+			lookups := 0
+			for _, id := range aliases {
+				if lookups >= maxAliasLookupsPerVuln {
+					break
+				}
+				lookups++
+				aliasVuln, err := fetchVulnByID(ctx, id, cache, ttl)
+				if err != nil {
+					continue
+				}
+				if sev, ok := aliasVuln["severity"].([]interface{}); ok && len(sev) > 0 {
+					v["severity"] = sev
+					break
+				}
 			}
-			if sev, ok := aliasVuln["severity"].([]interface{}); ok && len(sev) > 0 {
-				v["severity"] = sev
-				break
-			}
-		}
+		}(v)
 	}
+	wg.Wait()
 }
 
 func fetchVulns(ctx context.Context, ecosystem, name, version string, cache *redisCache, ttl time.Duration) ([]map[string]interface{}, error) {
@@ -620,18 +711,10 @@ func fetchVulns(ctx context.Context, ecosystem, name, version string, cache *red
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("osv.dev returned status %d", resp.StatusCode)
-	}
 	var out struct {
 		Vulns []map[string]interface{} `json:"vulns"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := doOSVJSON(req, &out); err != nil {
 		return nil, err
 	}
 	enrichVulnSeverities(ctx, out.Vulns, cache, ttl)
@@ -662,7 +745,12 @@ func collectVulnerabilities(ctx context.Context, manager, ns, name, version stri
 		Status:          make(map[string]vulnerabilityStatus),
 	}
 
-	record := func(pkg, ver string) {
+	type target struct {
+		pkg string
+		ver string
+	}
+	var targets []target
+	add := func(pkg, ver string) {
 		if pkg == "" {
 			return
 		}
@@ -683,31 +771,49 @@ func collectVulnerabilities(ctx context.Context, manager, ns, name, version stri
 			}
 			return
 		}
-		vulns, err := fetchVulns(ctx, eco, pkg, ver, cache, ttl)
-		if err != nil {
-			result.Status[pkg] = vulnerabilityStatus{
-				Status: "unknown",
-				Error:  err.Error(),
-			}
-			return
-		}
-		status := vulnerabilityStatus{
-			Status:        "no_advisory",
-			Checked:       true,
-			AdvisoryCount: len(vulns),
-		}
-		if len(vulns) > 0 {
-			status.Status = "vulnerable"
-			result.Vulnerabilities[pkg] = vulns
-		}
-		result.Status[pkg] = status
+		// Placeholder entry dedupes the package; overwritten once the
+		// OSV query for it completes.
+		result.Status[pkg] = vulnerabilityStatus{}
+		targets = append(targets, target{pkg: pkg, ver: ver})
 	}
 
 	rootPkg := formatPackage(manager, ns, name)
-	record(rootPkg, version)
+	add(rootPkg, version)
 	for dep, v := range deps {
-		record(dep, fmt.Sprint(v))
+		add(dep, fmt.Sprint(v))
 	}
+
+	// OSV queries run in parallel; total OSV traffic is bounded by osvSem
+	// inside fetchVulns.
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, t := range targets {
+		wg.Add(1)
+		go func(t target) {
+			defer wg.Done()
+			vulns, err := fetchVulns(ctx, eco, t.pkg, t.ver, cache, ttl)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				result.Status[t.pkg] = vulnerabilityStatus{
+					Status: "unknown",
+					Error:  err.Error(),
+				}
+				return
+			}
+			status := vulnerabilityStatus{
+				Status:        "no_advisory",
+				Checked:       true,
+				AdvisoryCount: len(vulns),
+			}
+			if len(vulns) > 0 {
+				status.Status = "vulnerable"
+				result.Vulnerabilities[t.pkg] = vulns
+			}
+			result.Status[t.pkg] = status
+		}(t)
+	}
+	wg.Wait()
 	return result
 }
 
@@ -733,30 +839,97 @@ func fetchScorecard(ctx context.Context, repo string, cache *redisCache, ttl tim
 	return out, nil
 }
 
+// maxConcurrentScorecardFetches bounds in-flight requests to the OpenSSF
+// Scorecard API.
+const maxConcurrentScorecardFetches = 8
+
 func collectScorecards(ctx context.Context, manager, ns, name string, deps map[string]interface{}, repos map[string]string, cache *redisCache, ttl time.Duration) map[string]interface{} {
 	result := make(map[string]interface{})
-	rootPkg := formatPackage(manager, ns, name)
-	repo := repos[rootPkg]
-	if repo == "" {
-		repo = repoFromPackage(manager, rootPkg)
+
+	type target struct {
+		pkg  string
+		repo string
 	}
-	if repo != "" {
-		if sc, err := fetchScorecard(ctx, repo, cache, ttl); err == nil {
-			result[rootPkg] = sc
+	var targets []target
+	seen := map[string]struct{}{}
+	add := func(pkg string) {
+		if _, ok := seen[pkg]; ok {
+			return
 		}
-	}
-	for dep := range deps {
-		repo := repos[dep]
+		seen[pkg] = struct{}{}
+		repo := repos[pkg]
 		if repo == "" {
-			repo = repoFromPackage(manager, dep)
+			repo = repoFromPackage(manager, pkg)
 		}
 		if repo != "" {
-			if sc, err := fetchScorecard(ctx, repo, cache, ttl); err == nil {
-				result[dep] = sc
-			}
+			targets = append(targets, target{pkg: pkg, repo: repo})
 		}
 	}
+	add(formatPackage(manager, ns, name))
+	for dep := range deps {
+		add(dep)
+	}
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, maxConcurrentScorecardFetches)
+	for _, t := range targets {
+		wg.Add(1)
+		go func(t target) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			sc, err := fetchScorecard(ctx, t.repo, cache, ttl)
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			result[t.pkg] = sc
+			mu.Unlock()
+		}(t)
+	}
+	wg.Wait()
 	return result
+}
+
+// collectSecurityData gathers OSV and Scorecard data for the dependency set,
+// running the two collections concurrently when both are requested.
+func collectSecurityData(ctx context.Context, manager, ns, name, version string, depMap map[string]interface{}, repoMap map[string]string, withVuln, withScorecard bool, cache *redisCache, ttl time.Duration) (vulnerabilityResult, map[string]interface{}) {
+	var vulns vulnerabilityResult
+	scorecards := map[string]interface{}{}
+	var wg sync.WaitGroup
+	if withVuln {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			vulns = collectVulnerabilities(ctx, manager, ns, name, version, depMap, cache, ttl)
+		}()
+	}
+	if withScorecard {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			scorecards = collectScorecards(ctx, manager, ns, name, depMap, repoMap, cache, ttl)
+		}()
+	}
+	wg.Wait()
+	return vulns, scorecards
+}
+
+// applySecurityData attaches the collected vulnerability and scorecard data
+// to a lookup response.
+func applySecurityData(deps map[string]interface{}, vulns vulnerabilityResult, scorecards map[string]interface{}, withVuln, withScorecard bool) {
+	if withVuln {
+		if len(vulns.Vulnerabilities) > 0 {
+			deps["vulnerabilities"] = vulns.Vulnerabilities
+		}
+		if len(vulns.Status) > 0 {
+			deps["vulnerability_status"] = vulns.Status
+		}
+	}
+	if withScorecard && len(scorecards) > 0 {
+		deps["scorecards"] = scorecards
+	}
 }
 
 func dotQuote(label string) string {
@@ -908,13 +1081,10 @@ func depsToDot(root, rootVersion string, deps map[string]interface{}, parents ma
 func dependencyGraphDot(ctx context.Context, managerName, ns, name, version string, deps map[string]interface{}, parents map[string][]string, cache *redisCache, ttl time.Duration, withVuln, withScorecard bool) string {
 	depMap, _ := deps["dependencies"].(map[string]interface{})
 	repoMap, _ := deps["repositories"].(map[string]string)
-	vulnStatus := map[string]vulnerabilityStatus{}
-	if withVuln {
-		vulnStatus = collectVulnerabilities(ctx, managerName, ns, name, version, depMap, cache, ttl).Status
-	}
-	scorecards := map[string]interface{}{}
-	if withScorecard {
-		scorecards = collectScorecards(ctx, managerName, ns, name, depMap, repoMap, cache, ttl)
+	vulns, scorecards := collectSecurityData(ctx, managerName, ns, name, version, depMap, repoMap, withVuln, withScorecard, cache, ttl)
+	vulnStatus := vulns.Status
+	if vulnStatus == nil {
+		vulnStatus = map[string]vulnerabilityStatus{}
 	}
 	return depsToDot(formatPackage(managerName, ns, name), version, depMap, parents, repoMap, vulnStatus, scorecards)
 }
@@ -1786,12 +1956,25 @@ func fetchRepoMetadata(ctx context.Context, repo string, cache *redisCache, ttl 
 		}
 	}
 
-	openCount, _ := searchPRs(repo, "open")
-	closedCount, _ := searchPRs(repo, "closed")
+	var openCount, closedCount, commits int
+	var last string
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		openCount, _ = searchPRs(repo, "open")
+	}()
+	go func() {
+		defer wg.Done()
+		closedCount, _ = searchPRs(repo, "closed")
+	}()
+	go func() {
+		defer wg.Done()
+		commits, last, _ = repoCommits(repo)
+	}()
+	wg.Wait()
 	meta["pulls_open"] = openCount
 	meta["pulls_closed"] = closedCount
-
-	commits, last, _ := repoCommits(repo)
 	meta["commit_count"] = commits
 	if last != "" {
 		meta["last_commit"] = last
@@ -1917,15 +2100,20 @@ func main() {
 		"composer": &composer.Composer{BaseURL: cfg.PackageManager.Composer},
 	}
 
+	// Raise the idle-connection limits so parallel lookups against the same
+	// upstream (deps.dev, OSV, Scorecard) reuse connections instead of
+	// churning through the default of two idle conns per host.
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.MaxIdleConns = 100
+	tr.MaxIdleConnsPerHost = 32
 	if cfg.Proxy.URL != "" {
 		purl, err := url.Parse(cfg.Proxy.URL)
 		if err != nil {
 			log.Fatalf("invalid proxy url: %v", err)
 		}
-		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.Proxy = http.ProxyURL(purl)
-		http.DefaultTransport = tr
 	}
+	http.DefaultTransport = tr
 
 	cache := newRedisCache(cfg)
 
@@ -2111,7 +2299,7 @@ func buildRouter(cfg *config.Config, cache *redisCache, recurse, withVuln, withS
 			return
 		}
 
-		deps, parents, errs, err := fetchAllDeps(ctx, m, ns, name, version, recursive, map[string]struct{}{}, "", pm, cache, cfg.Cache.TTL)
+		deps, parents, errs, err := fetchAllDeps(ctx, m, ns, name, version, recursive, pm, cache, cfg.Cache.TTL)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -2128,21 +2316,10 @@ func buildRouter(cfg *config.Config, cache *redisCache, recurse, withVuln, withS
 			w.Write([]byte(dot))
 			return
 		}
-		if vflag {
-			vulns := collectVulnerabilities(ctx, pm, ns, name, version, depMap, cache, cfg.Cache.TTL)
-			if len(vulns.Vulnerabilities) > 0 {
-				deps["vulnerabilities"] = vulns.Vulnerabilities
-			}
-			if len(vulns.Status) > 0 {
-				deps["vulnerability_status"] = vulns.Status
-			}
-		}
-		if sflag {
+		if vflag || sflag {
 			repoMap, _ := deps["repositories"].(map[string]string)
-			scs := collectScorecards(ctx, pm, ns, name, depMap, repoMap, cache, cfg.Cache.TTL)
-			if len(scs) > 0 {
-				deps["scorecards"] = scs
-			}
+			vulns, scs := collectSecurityData(ctx, pm, ns, name, version, depMap, repoMap, vflag, sflag, cache, cfg.Cache.TTL)
+			applySecurityData(deps, vulns, scs, vflag, sflag)
 		}
 		data, err := json.Marshal(deps)
 		if err == nil {
@@ -2208,7 +2385,7 @@ func buildRouter(cfg *config.Config, cache *redisCache, recurse, withVuln, withS
 			return
 		}
 
-		deps, parents, errs, err := fetchAllDeps(ctx, m, ns, name, version, reqRecurse, map[string]struct{}{}, "", "go", cache, cfg.Cache.TTL)
+		deps, parents, errs, err := fetchAllDeps(ctx, m, ns, name, version, reqRecurse, "go", cache, cfg.Cache.TTL)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -2226,21 +2403,10 @@ func buildRouter(cfg *config.Config, cache *redisCache, recurse, withVuln, withS
 			return
 		}
 
-		if reqVuln {
-			vulns := collectVulnerabilities(ctx, "go", ns, name, version, depMap, cache, cfg.Cache.TTL)
-			if len(vulns.Vulnerabilities) > 0 {
-				deps["vulnerabilities"] = vulns.Vulnerabilities
-			}
-			if len(vulns.Status) > 0 {
-				deps["vulnerability_status"] = vulns.Status
-			}
-		}
-		if reqScore {
+		if reqVuln || reqScore {
 			repoMap, _ := deps["repositories"].(map[string]string)
-			scs := collectScorecards(ctx, "go", ns, name, depMap, repoMap, cache, cfg.Cache.TTL)
-			if len(scs) > 0 {
-				deps["scorecards"] = scs
-			}
+			vulns, scs := collectSecurityData(ctx, "go", ns, name, version, depMap, repoMap, reqVuln, reqScore, cache, cfg.Cache.TTL)
+			applySecurityData(deps, vulns, scs, reqVuln, reqScore)
 		}
 		data, err := json.Marshal(deps)
 		if err != nil {
@@ -2303,7 +2469,7 @@ func buildRouter(cfg *config.Config, cache *redisCache, recurse, withVuln, withS
 			return
 		}
 
-		deps, parents, errs, err := fetchAllDeps(ctx, m, ns, name, version, reqRecurse, map[string]struct{}{}, "", pm, cache, cfg.Cache.TTL)
+		deps, parents, errs, err := fetchAllDeps(ctx, m, ns, name, version, reqRecurse, pm, cache, cfg.Cache.TTL)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -2320,21 +2486,10 @@ func buildRouter(cfg *config.Config, cache *redisCache, recurse, withVuln, withS
 			w.Write([]byte(dot))
 			return
 		}
-		if reqVuln {
-			vulns := collectVulnerabilities(ctx, pm, ns, name, version, depMap, cache, cfg.Cache.TTL)
-			if len(vulns.Vulnerabilities) > 0 {
-				deps["vulnerabilities"] = vulns.Vulnerabilities
-			}
-			if len(vulns.Status) > 0 {
-				deps["vulnerability_status"] = vulns.Status
-			}
-		}
-		if reqScore {
+		if reqVuln || reqScore {
 			repoMap, _ := deps["repositories"].(map[string]string)
-			scs := collectScorecards(ctx, pm, ns, name, depMap, repoMap, cache, cfg.Cache.TTL)
-			if len(scs) > 0 {
-				deps["scorecards"] = scs
-			}
+			vulns, scs := collectSecurityData(ctx, pm, ns, name, version, depMap, repoMap, reqVuln, reqScore, cache, cfg.Cache.TTL)
+			applySecurityData(deps, vulns, scs, reqVuln, reqScore)
 		}
 		data, err := json.Marshal(deps)
 		if err != nil {
@@ -2408,7 +2563,7 @@ func buildRouter(cfg *config.Config, cache *redisCache, recurse, withVuln, withS
 			return
 		}
 
-		deps, parents, errs, err := fetchAllDeps(ctx, m, ns, name, version, reqRecurse, map[string]struct{}{}, "", pm, cache, cfg.Cache.TTL)
+		deps, parents, errs, err := fetchAllDeps(ctx, m, ns, name, version, reqRecurse, pm, cache, cfg.Cache.TTL)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -2426,21 +2581,10 @@ func buildRouter(cfg *config.Config, cache *redisCache, recurse, withVuln, withS
 			return
 		}
 
-		if reqVuln {
-			vulns := collectVulnerabilities(ctx, pm, ns, name, version, depMap, cache, cfg.Cache.TTL)
-			if len(vulns.Vulnerabilities) > 0 {
-				deps["vulnerabilities"] = vulns.Vulnerabilities
-			}
-			if len(vulns.Status) > 0 {
-				deps["vulnerability_status"] = vulns.Status
-			}
-		}
-		if reqScore {
+		if reqVuln || reqScore {
 			repoMap, _ := deps["repositories"].(map[string]string)
-			scs := collectScorecards(ctx, pm, ns, name, depMap, repoMap, cache, cfg.Cache.TTL)
-			if len(scs) > 0 {
-				deps["scorecards"] = scs
-			}
+			vulns, scs := collectSecurityData(ctx, pm, ns, name, version, depMap, repoMap, reqVuln, reqScore, cache, cfg.Cache.TTL)
+			applySecurityData(deps, vulns, scs, reqVuln, reqScore)
 		}
 		data, err := json.Marshal(deps)
 		if err != nil {
@@ -2503,7 +2647,7 @@ func buildRouter(cfg *config.Config, cache *redisCache, recurse, withVuln, withS
 			return
 		}
 
-		deps, parents, errs, err := fetchAllDeps(ctx, m, "", name, version, reqRecurse, map[string]struct{}{}, "", pm, cache, cfg.Cache.TTL)
+		deps, parents, errs, err := fetchAllDeps(ctx, m, "", name, version, reqRecurse, pm, cache, cfg.Cache.TTL)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -2521,21 +2665,10 @@ func buildRouter(cfg *config.Config, cache *redisCache, recurse, withVuln, withS
 			return
 		}
 
-		if reqVuln {
-			vulns := collectVulnerabilities(ctx, pm, "", name, version, depMap, cache, cfg.Cache.TTL)
-			if len(vulns.Vulnerabilities) > 0 {
-				deps["vulnerabilities"] = vulns.Vulnerabilities
-			}
-			if len(vulns.Status) > 0 {
-				deps["vulnerability_status"] = vulns.Status
-			}
-		}
-		if reqScore {
+		if reqVuln || reqScore {
 			repoMap, _ := deps["repositories"].(map[string]string)
-			scs := collectScorecards(ctx, pm, "", name, depMap, repoMap, cache, cfg.Cache.TTL)
-			if len(scs) > 0 {
-				deps["scorecards"] = scs
-			}
+			vulns, scs := collectSecurityData(ctx, pm, "", name, version, depMap, repoMap, reqVuln, reqScore, cache, cfg.Cache.TTL)
+			applySecurityData(deps, vulns, scs, reqVuln, reqScore)
 		}
 		data, err := json.Marshal(deps)
 		if err != nil {

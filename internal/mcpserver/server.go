@@ -209,11 +209,22 @@ func (s *Server) callTool(ctx context.Context, name string, raw json.RawMessage)
 		if err != nil {
 			return nil, err
 		}
-		versions, err := s.client.Versions(ctx, query.Manager, query.Namespace, query.Name)
-		if err != nil {
-			return nil, err
-		}
+		// The version list and the recursive lookup are independent; fetch
+		// them concurrently since the lookup can take a while.
+		var (
+			versions    *VersionInfo
+			versionsErr error
+		)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			versions, versionsErr = s.client.Versions(ctx, query.Manager, query.Namespace, query.Name)
+		}()
 		lookup, err := s.client.Lookup(ctx, query)
+		<-done
+		if versionsErr != nil {
+			return nil, versionsErr
+		}
 		if err != nil {
 			return nil, err
 		}
