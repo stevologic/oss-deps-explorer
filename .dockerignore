@@ -1,0 +1,15 @@
+# Keep the API image build context lean; the API image only needs the Go
+# sources plus config.yaml (the UI ships in its own image, see ui/Dockerfile).
+.git
+.github
+.agents
+.claude
+.codex
+charts
+helm
+ui
+*.md
+Caddyfile
+deploy.sh
+docker-compose*.yml
+.deploy.lock

@@ -4639,7 +4639,7 @@ function App() {
       return e(
         "div",
         { className: "dependency-summary" },
-        e("span", null, `${total} packages`),
+        e("span", null, `${total} ${total === 1 ? "package" : "packages"}`),
         e(
           "span",
           {
@@ -4692,20 +4692,20 @@ function App() {
                 tone: "review",
                 icon: "icons/warning.svg",
                 label: "Review vulnerabilities",
-                detail: `${analysis.totals.findings} packages have OSV advisories.`,
+                detail: `${analysis.totals.findings} ${analysis.totals.findings === 1 ? "package has" : "packages have"} OSV advisories.`,
               }
             : hasUnresolved
               ? {
                   tone: "unknown",
                   icon: "icons/warning.svg",
                   label: "Resolve OSV gaps",
-                  detail: `${analysis.totals.unresolvedPackages} packages need another lookup.`,
+                  detail: `${analysis.totals.unresolvedPackages} ${analysis.totals.unresolvedPackages === 1 ? "package needs" : "packages need"} another lookup.`,
                 }
               : {
                   tone: "clean",
                   icon: "icons/success.svg",
                   label: "No known OSV risk",
-                  detail: `${analysis.totals.cleanPackages} packages checked clean.`,
+                  detail: `${analysis.totals.cleanPackages} ${analysis.totals.cleanPackages === 1 ? "package" : "packages"} checked clean.`,
                 };
       // Always show the two headline numbers; secondary tiles only appear
       // when they carry a nonzero count.
@@ -8912,10 +8912,11 @@ function App() {
           React.Fragment,
           null,
           e(
-            "h2",
+            "h1",
             { className: "page-title" },
               e("img", {
                 src: "icons/globe.svg",
+                alt: "",
                 className: "title-icon",
                 onClick: () => window.location.reload(),
               }),

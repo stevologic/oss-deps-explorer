@@ -1,0 +1,29 @@
+# Caddy config for https://ossde.dev
+# TLS certificates are provisioned automatically via Let's Encrypt and
+# persisted in the caddy_data volume (see docker-compose.prod.yml).
+
+ossde.dev {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	handle /api/* {
+		reverse_proxy api:8080
+	}
+
+	handle {
+		reverse_proxy ui:80
+	}
+}
+
+# Uncomment once a DNS record for www.ossde.dev exists:
+# www.ossde.dev {
+# 	redir https://ossde.dev{uri} permanent
+# }
