@@ -1,6 +1,7 @@
 import copy
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -18,6 +19,9 @@ def intent():
 
 
 class Operations(unittest.TestCase):
+    def test_cli_metadata_decodes_utf8_on_windows(self):
+        self.assertEqual(operations.run(sys.executable, '-X', 'utf8', '-c', 'print("Unicode: “✓”")'), 'Unicode: “✓”')
+
     def test_real_git_hook_deletes_only_approved_tip_and_rejects_stale_tip(self):
         workspace = Path.cwd().resolve()
         with tempfile.TemporaryDirectory(prefix='maintenance-local-test-', dir=workspace) as temp:

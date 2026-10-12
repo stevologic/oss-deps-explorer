@@ -17,7 +17,7 @@ from maintenance import API, SHA, cleanup_queue, collect, review_queue, validate
 
 
 def run(*args, cwd=None):
-    result = subprocess.run(args, cwd=cwd, capture_output=True, text=True)
+    result = subprocess.run(args, cwd=cwd, capture_output=True, text=True, encoding="utf-8")
     if result.returncode:
         # Never propagate provider/credential-bearing stderr into an artifact.
         raise ValueError("Command failed: " + args[0] + " (exit " + str(result.returncode) + ")")
