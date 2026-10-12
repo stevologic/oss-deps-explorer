@@ -39,6 +39,23 @@ def snapshot():
 
 
 class Safety(unittest.TestCase):
+    def test_only_matching_newer_success_supersedes_a_cancelled_run(self):
+        old = {"id": 1, "head_sha": S, "workflow_id": 9, "event": "pull_request",
+               "head_branch": "codex/fix", "status": "completed", "conclusion": "cancelled"}
+        new = {**old, "id": 2, "conclusion": "success"}
+        p = pull()
+        p["runs"] = [old, new]
+        blocker = "held/failed/pending workflow on current head"
+        self.assertNotIn(blocker, m.review_queue(policy(), p)["blockers"])
+        for key, value in (("workflow_id", 8), ("event", "workflow_dispatch"),
+                           ("head_branch", "other"), ("head_sha", "b"*40),
+                           ("status", "in_progress")):
+            p["runs"] = [old, {**new, key: value}]
+            self.assertIn(blocker, m.review_queue(policy(), p)["blockers"])
+        for state in ("action_required", "failure"):
+            p["runs"] = [{**old, "conclusion": state}, new]
+            self.assertIn(blocker, m.review_queue(policy(), p)["blockers"])
+
     def test_all_mutations_are_rejected(self):
         for key in ("merge", "close", "delete", "deploy"):
             p = policy()

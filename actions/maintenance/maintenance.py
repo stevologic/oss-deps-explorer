@@ -11,7 +11,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -138,8 +138,16 @@ def review_queue(config, pull):
             reasons.append("required check missing/not successful: " + required)
     if any(value not in ("success", "neutral", "skipped") for value in contexts.values()):
         reasons.append("failed/pending check")
-    if any(r.get("head_sha") == sha and (r.get("status") != "completed" or
-            r.get("conclusion") not in ("success", "neutral", "skipped")) for r in pull.get("runs", [])):
+    runs = [r for r in pull.get("runs", []) if r.get("head_sha") == sha]
+    def superseded_cancellation(run):
+        key = tuple(run.get(k) for k in ("workflow_id", "event", "head_branch"))
+        return (run.get("conclusion") == "cancelled" and all(key) and any(
+            newer.get("id", 0) > run.get("id", 0) and
+            tuple(newer.get(k) for k in ("workflow_id", "event", "head_branch")) == key and
+            newer.get("status") == "completed" and newer.get("conclusion") == "success"
+            for newer in runs))
+    if any((r.get("status") != "completed" or r.get("conclusion") not in ("success", "neutral", "skipped"))
+            and not superseded_cancellation(r) for r in runs):
         reasons.append("held/failed/pending workflow on current head")
     base, head = pull["base"]["ref"], pull["head"]["ref"]
     if base == config["default_branch"] and head != config["integration_branch"]:

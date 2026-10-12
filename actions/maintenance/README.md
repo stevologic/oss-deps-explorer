@@ -1,4 +1,4 @@
-# Maintenance contract 1.1.0
+# Maintenance contract 1.1.1
 
 This shared composite action lives in an existing owned repository. Consumers pin
 `stevologic/oss-deps-explorer/actions/maintenance@<full-40-character-commit>`.
@@ -79,6 +79,9 @@ Never close the original security PR before equivalent changes land and verify.
 
 The PR queue names current-head failed/missing checks, pending/held workflows,
 conflicts, review/security holds, requested reviewers and requested changes.
+A cancelled run is superseded only by a newer successful run for the same exact
+head, workflow, event and branch. A dispatch success cannot replace a PR run;
+failed/approval-required runs and explicit holds remain blocked.
 Reproduce actionable issues, propose a bounded fix in a draft feature PR and link
 evidence. Close only items demonstrably fixed, duplicated or obsolete after fresh
 readback; age alone is not proof. Combine compatible dependency proposals and
