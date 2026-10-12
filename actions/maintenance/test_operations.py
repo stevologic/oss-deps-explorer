@@ -19,6 +19,18 @@ def intent():
 
 
 class Operations(unittest.TestCase):
+    def test_partial_ruleset_report_never_authorizes_merge_or_deletion(self):
+        data = snapshot()
+        data.update(complete=False, evidence_gaps=["private_rulesets_feature_unavailable"])
+        with self.assertRaises(ValueError): deletion_preflight(policy(), intent(), data)
+        i = {**intent(), 'operation': 'merge-reviewed-pr', 'pr_number': 7,
+             'expected_sha': S, 'expected_base_sha': 'b'*40}
+        with self.assertRaises(ValueError): merge_preflight(policy(), i, data)
+        class Denied:
+            def get(self, path): return {'default_branch': 'main'}
+            def pages(self, path): raise ValueError('Ruleset visibility unavailable')
+        with self.assertRaises(ValueError): operations.collect_cleanup(policy(), intent(), Denied())
+
     def test_server_gate_rejects_unchecked_or_owner_bypassable_base_races(self):
         safe = {"required_status_checks": {"strict": True, "contexts": ["build"]},
                 "enforce_admins": {"enabled": True}}
