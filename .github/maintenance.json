@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "repository": "stevologic/oss-deps-explorer",
+  "mode": "dry-run",
+  "default_branch": "main",
+  "integration_branch": "development",
+  "automation": {
+    "merge": false,
+    "close": false,
+    "delete": false,
+    "deploy": false
+  },
+  "protected_patterns": [
+    "main",
+    "master",
+    "develop*",
+    "release*",
+    "gh-pages"
+  ],
+  "topic_prefixes": [
+    "codex/",
+    "dependabot/",
+    "chore/",
+    "cursor/",
+    "agent/",
+    "feature/",
+    "fix/"
+  ],
+  "active_branches": [
+    "codex/shared-maintenance-pilot"
+  ],
+  "locked_prs": [],
+  "required_checks": [
+    "build"
+  ],
+  "validation_commands": [
+    "go mod download",
+    "gofmt validation",
+    "go vet ./...",
+    "go test ./...",
+    "node --test ui/**/*.test.mjs",
+    "docker build -t oss-deps-explorer:TEST .",
+    "python -m unittest discover -s actions/maintenance"
+  ],
+  "cadences": {
+    "runtime": "weekly",
+    "container_images": "weekly",
+    "tooling": "monthly",
+    "major_review": "quarterly",
+    "security": "advisory-driven; preserve PR/push checks"
+  },
+  "supported_image_tracks": [
+    "golang:1.26-alpine3.24",
+    "alpine:3.24.2"
+  ],
+  "custom_jobs": [
+    "existing weekly GitHub default CodeQL configuration"
+  ],
+  "ai": {
+    "provider": "none",
+    "enabled": false,
+    "max_output_tokens": 1000
+  }
+}

@@ -1,0 +1,44 @@
+name: Maintenance dry-run
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '41 5 * * 1'
+  pull_request:
+    paths: ['.github/maintenance.json', '.github/workflows/maintenance-plan.yml', 'actions/maintenance/**', 'actions/maintenance-operations/**']
+  push:
+    branches: [main, development]
+    paths: ['.github/maintenance.json', '.github/workflows/maintenance-plan.yml', 'actions/maintenance/**', 'actions/maintenance-operations/**']
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  checks: read
+  actions: read
+
+concurrency:
+  group: maintenance-plan-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test the common safety contract
+        run: python3 -m unittest discover -s actions/maintenance -p 'test_*.py'
+      - name: Inventory and propose bounded work
+        uses: ./actions/maintenance # contract v1.0.0, immutable pilot source
+        with:
+          config: .github/maintenance.json
+          token: ${{ github.token }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: maintenance-plan-${{ github.run_id }}
+          path: maintenance-report/
+          retention-days: 14
+          if-no-files-found: error
