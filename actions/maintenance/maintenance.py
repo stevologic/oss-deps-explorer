@@ -11,7 +11,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
 

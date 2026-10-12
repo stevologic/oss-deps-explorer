@@ -1,0 +1,33 @@
+name: Approved repository maintenance operation
+description: Separately invoked operator-approved exact-SHA operations; preview by default. Existing owner authority only.
+inputs:
+  config:
+    default: .github/maintenance.json
+    description: Repository-owned policy
+  intent:
+    required: true
+    description: Trusted owner-approved bounded operation record
+  intent-sha256:
+    required: true
+    description: Digest of the exact approved record
+  apply:
+    default: 'false'
+    description: Explicit operator apply; restricted to trusted default-branch dispatch
+  token:
+    required: true
+    description: Existing owner-scoped authority; no new credential or grant is provisioned
+runs:
+  using: composite
+  steps:
+    - name: Validate exact approved operation and preserve repository gates
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        CONFIG: ${{ inputs.config }}
+        INTENT: ${{ inputs.intent }}
+        DIGEST: ${{ inputs.intent-sha256 }}
+        APPLY: ${{ inputs.apply }}
+      run: |
+        args=()
+        if [ "$APPLY" = 'true' ]; then args+=(--apply); fi
+        python3 "$GITHUB_ACTION_PATH/../maintenance/operations.py" --config "$CONFIG" --intent "$INTENT" --intent-sha256 "$DIGEST" --checkout "$GITHUB_WORKSPACE" "${args[@]}"

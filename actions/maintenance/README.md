@@ -1,4 +1,4 @@
-# Maintenance contract 1.0.0
+# Maintenance contract 1.1.0
 
 This shared composite action lives in an existing owned repository. Consumers pin
 `stevologic/oss-deps-explorer/actions/maintenance@<full-40-character-commit>`.
@@ -36,6 +36,30 @@ The pilot drafts intentionally stop before integration and production deployment
 | `ai` | Current provider (`xai`, `openai`, `none`), explicitly enabled advisory flag and bounded output |
 
 ## Standard maintenance work
+
+The read-only action is the first stage, not the full autonomous end state.
+`actions/maintenance-operations` is a separately invoked action, preview by default.
+Its CLI accepts a digest-bound, explicitly owner-approved operation allowlist and
+existing owner authority. No write token, access grant or mutation workflow is
+provisioned by the pilots. Apply from Actions is limited to a trusted default-
+branch workflow_dispatch; PR events cannot invoke it.
+
+Supported bounded operations are deletion of confirmed merged topic branches and
+merge of a reviewed exact-head PR through feature→integration→main. Each repeats
+fresh inventory and current checks/reviews/holds/base ancestry. Merges use the
+head-match option without admin override/auto-merge/review dismissal, then require
+the actual integration commit's CI before further promotion. Draft/failed/held PRs
+remain blocked. Semantic issue fixes/obsolete closures require reviewed evidence;
+the action will not invent closure authority from age or model advice. Dependency
+fixes use native Dependabot and validated draft integration batches, and actionable
+issue/build fixes land in normal feature PRs with repository tests.
+
+Deletion uses an atomic normal git push with a temporary pre-push guard. The guard
+compares Git's advertised remote SHA with every approved expected SHA and rejects
+any updated/extra/missing/duplicate ref or non-deletion operation. It preserves
+active/unmerged/default/development/release/Pages branches and repeats absence
+readback. There is no force-push flag. The temporary hook path is verified to stay
+inside the isolated checkout before cleanup. See [Git pre-push documentation](https://git-scm.com/docs/githooks#_pre_push).
 
 Native Dependabot handles dependencies and Docker base-image version proposals.
 Keep weekly runtime/container updates, monthly Actions tooling checks and quarterly
