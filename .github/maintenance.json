@@ -27,7 +27,9 @@
     "fix/"
   ],
   "active_branches": [
-    "codex/shared-maintenance-pilot"
+    "codex/shared-maintenance-pilot",
+    "codex/maintenance-cancelled-run-review",
+    "codex/maintenance-source-reservations"
   ],
   "locked_prs": [],
   "required_checks": [
