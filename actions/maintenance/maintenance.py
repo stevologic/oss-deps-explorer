@@ -11,7 +11,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-VERSION = "1.1.1"
+VERSION = "1.1.2"
+PRIVATE_RULESETS_GAP = "private_rulesets_feature_unavailable"
+PRIVATE_RULESETS_MESSAGE = "Upgrade to GitHub Pro or make this repository public to enable this feature."
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -74,10 +76,29 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 def collect(config, api):
     branches = api.pages("/branches")
     prs = api.pages("/pulls?state=open")
-    snapshot = {"repository": config["repository"], "default_branch": api.get("")["default_branch"],
+    repository = api.get("")
+    try:
+        rulesets = api.pages("/rulesets")
+        gaps = []
+    except urllib.error.HTTPError as error:
+        # Only the verified private-plan limitation is eligible for a read-only
+        # partial report. Never turn authorization/rate/server errors into []
+        # or claim complete protection evidence; no purchase/access is requested.
+        if (repository.get("private") is not True or error.code != 403 or
+                (error.headers or {}).get("X-RateLimit-Remaining") == "0"):
+            raise
+        try:
+            message = json.loads(error.read(4096)).get("message")
+        except (ValueError, AttributeError):
+            raise error
+        if message != PRIVATE_RULESETS_MESSAGE:
+            raise
+        rulesets, gaps = None, [PRIVATE_RULESETS_GAP]
+    snapshot = {"repository": config["repository"], "default_branch": repository["default_branch"],
+                "private": repository.get("private") is True, "evidence_gaps": gaps,
                 "collected_at": dt.datetime.now(dt.timezone.utc).isoformat(), "complete": True,
                 "branches": branches, "prs": [], "issues": api.pages("/issues?state=open"),
-                "rulesets": api.pages("/rulesets"), "ancestry": {}, "merged_prs": []}
+                "rulesets": rulesets, "ancestry": {}, "merged_prs": []}
     # These are evidence candidates only; an old/missing merged PR can never authorize cleanup.
     snapshot["merged_prs"] = [p for p in api.pages("/pulls?state=closed") if p.get("merged_at")]
     for pull in prs:
@@ -97,6 +118,8 @@ def collect(config, api):
             for target in (config["default_branch"], config["integration_branch"]):
                 compare = api.get("/compare/" + sha + "..." + urllib.parse.quote(target, safe=""))
                 snapshot["ancestry"][sha][target] = compare.get("behind_by") == 0
+    snapshot["data_complete"] = True
+    snapshot["complete"] = not gaps
     return snapshot
 
 
@@ -172,7 +195,7 @@ def cleanup_queue(config, snapshot):
         protected = name in (config["default_branch"], config["integration_branch"]) or branch.get("protected")
         protected = protected or any(fnmatch.fnmatchcase(name, p) for p in config["protected_patterns"])
         topic = any(name.startswith(prefix) for prefix in config["topic_prefixes"])
-        if (snapshot.get("complete") is True and not protected and name not in active and topic
+        if (snapshot.get("complete") is True and not snapshot.get("evidence_gaps") and not protected and name not in active and topic
                 and SHA.fullmatch(sha) and merged
                 and all(evidence.get(t) is True for t in (config["default_branch"], config["integration_branch"]))):
             candidates.append({"branch": name, "expected_sha": sha,
@@ -186,7 +209,12 @@ def cleanup_queue(config, snapshot):
 
 def plan(config, snapshot):
     validate(config)
-    if (snapshot.get("complete") is not True or snapshot.get("repository") != config["repository"]
+    if snapshot.get("complete") is True and snapshot.get("evidence_gaps"):
+        raise ValueError("Protection evidence gaps cannot be declared complete")
+    partial = (snapshot.get("complete") is False and snapshot.get("private") is True and
+               snapshot.get("data_complete") is True and snapshot.get("rulesets") is None and
+               snapshot.get("evidence_gaps") == [PRIVATE_RULESETS_GAP])
+    if ((snapshot.get("complete") is not True and not partial) or snapshot.get("repository") != config["repository"]
             or snapshot.get("default_branch") != config["default_branch"]):
         raise ValueError("Incomplete or mismatched inventory; no proposals produced")
     timestamp = dt.datetime.fromisoformat(snapshot["collected_at"].replace("Z", "+00:00"))
@@ -205,11 +233,17 @@ def plan(config, snapshot):
     issues = [{"number": x["number"], "url": x.get("html_url"), "title": x["title"],
                "next_step": "reproduce with repository validation; propose bounded fix in draft feature PR",
                "close_authorized": False} for x in snapshot["issues"] if not x.get("pull_request")]
+    pulls = [review_queue(config, x) for x in snapshot["prs"]]
+    if partial:
+        for pull in pulls:
+            pull["blockers"] = sorted(set(pull["blockers"] + ["protection inventory incomplete"]))
+            pull["next_step"] = "manual review; incomplete protection evidence cannot authorize operations"
     return {"contract_version": VERSION, "repository": config["repository"], "mode": "dry-run",
             "collected_at": snapshot["collected_at"], "mutations": [],
+            "evidence_complete": not partial, "evidence_gaps": snapshot.get("evidence_gaps", []),
             "policy_sha256": hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest(),
             "integration": {key: snapshot["integration"].get(key) for key in ("status", "ahead_by", "behind_by")},
-            "pull_requests": [review_queue(config, x) for x in snapshot["prs"]], "issues": issues,
+            "pull_requests": pulls, "issues": issues,
             "branch_cleanup_candidates": candidates, "preserved_branches": preserved,
             "validation_commands": config["validation_commands"], "cadences": config["cadences"],
             "periodic_review": periodic, "supported_image_tracks": config.get("supported_image_tracks", []),
@@ -219,6 +253,8 @@ def plan(config, snapshot):
 
 def advise(config, report, env, opener=None):
     ai = config["ai"]
+    if report.get("evidence_complete") is False:
+        return {"provider": ai["provider"], "status": "disabled: incomplete protection inventory"}
     if not ai["enabled"]:
         return {"provider": ai["provider"], "status": "disabled: deterministic processing first"}
     if env.get("GITHUB_EVENT_NAME") not in ("workflow_dispatch", "schedule") or env.get("GITHUB_REF") != "refs/heads/" + config["default_branch"]:
@@ -263,6 +299,8 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     (output / "plan.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     summary = (f"Maintenance {VERSION}: `{config['repository']}`\n\n"
+               + ("PARTIAL READ-ONLY: private rulesets unavailable; all branches preserved, AI and operations blocked.\n\n"
+                  if not report["evidence_complete"] else "") +
                f"Dry-run: {len(report['pull_requests'])} PRs, {len(report['issues'])} issues, "
                f"{len(report['branch_cleanup_candidates'])} cleanup candidates. No mutations.\n\n"
                "Read plan.json for current-head blockers and exact repository validation commands.\n")
