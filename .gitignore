@@ -3,3 +3,7 @@
 
 # Codex agent sandbox: scratch/mount dir, never part of a build context
 .codex/
+
+__pycache__/
+*.pyc
+maintenance-report/
