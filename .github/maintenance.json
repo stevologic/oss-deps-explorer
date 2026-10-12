@@ -30,7 +30,8 @@
     "codex/shared-maintenance-pilot",
     "codex/maintenance-cancelled-run-review",
     "codex/maintenance-private-inventory",
-    "codex/maintenance-source-reservations"
+    "codex/maintenance-source-reservations",
+    "codex/maintenance-artifact-patch"
   ],
   "locked_prs": [],
   "required_checks": [
