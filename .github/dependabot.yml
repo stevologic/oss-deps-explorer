@@ -10,10 +10,23 @@ version: 2
 updates:
   - package-ecosystem: "gomod"
     directory: "/"
+    target-branch: development # version updates only
     schedule:
       interval: "weekly"
   - package-ecosystem: "github-actions"
     directory: "/"
+    target-branch: development # version updates only
     schedule:
-      interval: "weekly"
+      interval: "monthly"
 
+
+  - package-ecosystem: docker
+    directory: /
+    target-branch: development
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: golang
+        update-types: ['version-update:semver-major']
+      - dependency-name: alpine
+        update-types: ['version-update:semver-major']

@@ -1,0 +1,30 @@
+name: Repository maintenance plan
+description: Versioned, read-only maintenance inventory and review queue. Never merges, deletes, or deploys.
+inputs:
+  config:
+    description: Repository-owned policy JSON
+    default: .github/maintenance.json
+  token:
+    description: Existing read-only GitHub token
+    required: true
+  output:
+    description: Directory for source-safe reports
+    default: maintenance-report
+  ai-key:
+    description: Optional existing provider credential; never passed in pilot callers
+    required: false
+  ai-model:
+    description: Account-verified economical model, required only for explicitly enabled advisory AI
+    required: false
+runs:
+  using: composite
+  steps:
+    - name: Generate dry-run plan
+      shell: bash
+      env:
+        MAINTENANCE_CONFIG: ${{ inputs.config }}
+        MAINTENANCE_OUTPUT: ${{ inputs.output }}
+        GH_TOKEN: ${{ inputs.token }}
+        MAINTENANCE_AI_KEY: ${{ inputs.ai-key }}
+        MAINTENANCE_AI_MODEL: ${{ inputs.ai-model }}
+      run: python3 "$GITHUB_ACTION_PATH/maintenance.py" --config "$MAINTENANCE_CONFIG" --output "$MAINTENANCE_OUTPUT"
