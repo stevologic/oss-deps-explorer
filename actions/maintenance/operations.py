@@ -12,6 +12,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 
 from maintenance import API, SHA, cleanup_queue, collect, review_queue, validate
 
@@ -104,6 +105,17 @@ def merge_preflight(config, intent, snapshot):
     return pull
 
 
+def require_merge_protection(config, protection):
+    """The server must reject a base advance after our read and before merge."""
+    required = protection.get("required_status_checks") or {}
+    contexts = set(required.get("contexts", []))
+    contexts.update(row.get("context") for row in required.get("checks", []))
+    if (required.get("strict") is not True or
+            (protection.get("enforce_admins") or {}).get("enabled") is not True or
+            not set(config["required_checks"]).issubset(contexts)):
+        raise ValueError("Merge requires verified strict required checks enforced for the owner; preserve manual review until that gate is verified")
+
+
 def guarded_delete(config, intent, checkout):
     remote = run("git", "remote", "get-url", "origin", cwd=checkout)
     if remote != "https://github.com/" + config["repository"] + ".git":
@@ -175,6 +187,8 @@ def main():
         combined = api.get("/compare/" + target + "..." + intent["expected_sha"])
         if combined.get("behind_by") != 0:
             raise ValueError("PR head does not contain the current target; revalidate integration")
+        protection = api.get("/branches/" + urllib.parse.quote(pull["base"]["ref"], safe="") + "/protection")
+        require_merge_protection(config, protection)
         decision = json.loads(run("gh", "pr", "view", str(intent["pr_number"]), "--repo", config["repository"], "--json", "reviewDecision,mergeStateStatus"))
         if decision.get("reviewDecision") == "REVIEW_REQUIRED" or decision.get("mergeStateStatus") != "CLEAN":
             raise ValueError("Repository review/security/integration gate remains blocked")

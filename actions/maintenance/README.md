@@ -54,6 +54,12 @@ the action will not invent closure authority from age or model advice. Dependenc
 fixes use native Dependabot and validated draft integration batches, and actionable
 issue/build fixes land in normal feature PRs with repository tests.
 
+The merge operator also requires existing strict required checks enforced for the
+owner on the target branch. This lets GitHub reject a target advance after preflight.
+Missing/inaccessible protection or unverified ruleset-only enforcement fails closed;
+the pilot does not create or loosen protection. Keep integration under manual review
+until that server gate is verified. See [GitHub strict status checks](https://docs.github.com/repositories/configuring-branches-and-merges-in-your-repository/defining-the-mergeability-of-pull-requests/about-protected-branches).
+
 Deletion uses an atomic normal git push with a temporary pre-push guard. The guard
 compares Git's advertised remote SHA with every approved expected SHA and rejects
 any updated/extra/missing/duplicate ref or non-deletion operation. It preserves

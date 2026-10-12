@@ -19,6 +19,18 @@ def intent():
 
 
 class Operations(unittest.TestCase):
+    def test_server_gate_rejects_unchecked_or_owner_bypassable_base_races(self):
+        safe = {"required_status_checks": {"strict": True, "contexts": ["build"]},
+                "enforce_admins": {"enabled": True}}
+        operations.require_merge_protection(policy(), safe)
+        for mutate in (lambda p: p["required_status_checks"].update(strict=False),
+                       lambda p: p["required_status_checks"].update(contexts=[]),
+                       lambda p: p["enforce_admins"].update(enabled=False),
+                       lambda p: p.clear()):
+            unsafe = copy.deepcopy(safe)
+            mutate(unsafe)
+            with self.assertRaises(ValueError): operations.require_merge_protection(policy(), unsafe)
+
     def test_cli_metadata_decodes_utf8_on_windows(self):
         self.assertEqual(operations.run(sys.executable, '-X', 'utf8', '-c', 'print("Unicode: “✓”")'), 'Unicode: “✓”')
 
