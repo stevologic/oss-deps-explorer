@@ -68,11 +68,14 @@ def collect_cleanup(config, intent, api):
     repo = api.get("")
     if repo.get("default_branch") != config["default_branch"]:
         raise ValueError("Actual default branch changed")
+    # Operator deletion also needs actual ruleset visibility. The read-only
+    # partial-report exception must never become a mutation exception.
+    rulesets = api.pages("/rulesets")
     branches = api.pages("/branches")
     pulls = api.pages("/pulls?state=open")
     merged = [p for p in api.pages("/pulls?state=closed") if p.get("merged_at")]
     snapshot = {"complete": True, "repository": config["repository"], "branches": branches,
-                "prs": pulls, "merged_prs": merged, "ancestry": {}}
+                "prs": pulls, "merged_prs": merged, "ancestry": {}, "rulesets": rulesets}
     wanted = {b["branch"]: b["expected_sha"] for b in intent["branches"]}
     for branch in branches:
         if branch["name"] not in wanted:
@@ -90,6 +93,8 @@ def collect_cleanup(config, intent, api):
 
 def merge_preflight(config, intent, snapshot):
     validate_intent(config, intent)
+    if snapshot.get("complete") is not True or snapshot.get("evidence_gaps"):
+        raise ValueError("Complete protection inventory is required for operator merges")
     pull = next((p for p in snapshot["prs"] if p["number"] == intent["pr_number"]), None)
     if pull is None or pull["head"]["sha"] != intent["expected_sha"]:
         raise ValueError("PR missing or head changed")

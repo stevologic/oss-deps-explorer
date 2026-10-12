@@ -1,4 +1,4 @@
-# Maintenance contract 1.1.1
+# Maintenance contract 1.1.2
 
 This shared composite action lives in an existing owned repository. Consumers pin
 `stevologic/oss-deps-explorer/actions/maintenance@<full-40-character-commit>`.
@@ -12,14 +12,37 @@ The only supported mode is `dry-run`. The action accepts repository-owned
 source-safe `plan.json` plus `summary.md`. It never executes configured commands,
 checks out a PR head, merges, closes, deletes, deploys or runs model tools. No raw
 source banks, issue bodies, credentials, saves or binaries are published in reports.
-An incomplete/mismatched/stale inventory fails closed. This is a work queue;
+An unknown incomplete/mismatched/stale inventory fails closed. The narrowly
+identified private-repository ruleset limitation below permits only a labelled
+partial read-only report. This is a work queue;
 repository checks, required reviews, security gates and owner acceptance still apply.
 
 Feature branches target the existing `develop`/`development`. Preserve both sides
 of divergence using a normal merge, resolve conflicts, run the repository's exact
 build/test/security gates, then open the reviewed promotion PR to `main`. Existing
 main deployment stays in charge. Never force-push or rename branches blindly.
-The pilot drafts intentionally stop before integration and production deployment.
+Each new contract or consumer starts as a reviewable draft before validated
+integration and separate production promotion.
+
+## Private protection evidence
+
+GitHub can return the exact private-plan feature message "Upgrade to GitHub Pro or
+make this repository public to enable this feature." from the rulesets endpoint.
+Only that HTTP403 on a verified private repository, with no exhausted rate limit,
+permits a partial report after all remaining metadata reads finish successfully.
+Public-repository, authorization, rate-limit, malformed and other API failures
+still stop inventory. This exception requests no purchase, visibility change,
+credential or additional access.
+
+The snapshot records `complete: false`, `data_complete: true`, `rulesets: null`
+and `evidence_gaps: ["private_rulesets_feature_unavailable"]`. The report explicitly
+sets `evidence_complete: false`: protection is unknown, never an empty verified
+ruleset list. Every PR carries a protection-evidence blocker, every branch is
+preserved, cleanup proposals are empty, and advisory AI is disabled even when an
+existing provider key is configured. Operator merges require complete evidence;
+operator deletion independently reads rulesets and stops when unavailable.
+Partial inventory is useful triage metadata and cannot establish adoption or
+mutation authority. Repository security findings and owner review gates remain.
 
 ## Policy fields
 
@@ -118,7 +141,8 @@ python actions/maintenance/maintenance.py --config .github/maintenance.json \
   --snapshot /path/to/fresh-complete-inventory.json --output /tmp/maintenance-pilot
 ```
 
-The safety suite covers stale heads/statuses, action_required despite green
+The safety suite covers private-plan partial reports and their AI/operator refusal,
+unrecognized API failures, stale heads/statuses, action_required despite green
 dispatch, review holds, divergent integration, active/protected/unmerged topics,
 fork evidence, credential/provider boundaries and untrusted model advice.
 The three pilot repositories must pass their own final-tree CI before adoption.
@@ -130,7 +154,8 @@ Winter Hunt adoption remains deferred: pinned Unity/URP native, packaged, hardwa
 and human gates remain mandatory; Luigi native jobs require exclusive coordination.
 Raw licensed banks, saves and frozen ZIP/source identities remain private/preserved.
 Arrowhead retains signed Karen review and write-token separation. Arizona retains
-transaction/browser gates. Wire Hold retains PR11's explicit do-not-merge hold.
+transaction/browser gates. Wire Hold retains PR11's explicit do-not-merge hold,
+PR16's draft reservation and its fee/contact/manual packet gates.
 
 References: [Dependabot options](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference),
 [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions),
