@@ -5,10 +5,10 @@ on:
   schedule:
     - cron: '41 5 * * 1'
   pull_request:
-    paths: ['.github/maintenance.json', '.github/workflows/maintenance-plan.yml', 'actions/maintenance/**']
+    paths: ['.github/maintenance.json', '.github/workflows/maintenance-plan.yml', 'actions/maintenance/**', 'actions/maintenance-operations/**']
   push:
     branches: [main, development]
-    paths: ['.github/maintenance.json', '.github/workflows/maintenance-plan.yml', 'actions/maintenance/**']
+    paths: ['.github/maintenance.json', '.github/workflows/maintenance-plan.yml', 'actions/maintenance/**', 'actions/maintenance-operations/**']
 
 permissions:
   contents: read

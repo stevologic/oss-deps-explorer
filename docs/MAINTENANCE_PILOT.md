@@ -7,7 +7,7 @@ new versions. Old individual green checks are evidence, not validation of this
 combined tree. Original PRs and branches stay open until reviewed integration and
 main promotion establish equivalence. Main and development are unchanged by this draft.
 
-The reusable [contract 1.0.0](../actions/maintenance/README.md) is hosted here,
+The reusable [contract 1.1.0](../actions/maintenance/README.md) is hosted here,
 with repository-local JSON policies and full-SHA consumers in stevo.ai/Shiba.
 The action supports only read-only dry-run. Python safety tests and the three
 offline pilots pass; no model credential or request is used. No source banks,
@@ -38,12 +38,22 @@ remain default-main targeted**, independent of version cadence; no routing claim
 advisory delay is implied. Runtime and supported container proposals are weekly,
 tooling monthly, majors require quarterly review and normal validation.
 
-Local checks: common safety suite (24 tests), OSS UI tests (3), complete metadata
+Local checks: common safety suite (30 tests, including a real local Git stale-tip
+rejection and exact-tip deletion fixture), OSS UI tests (3), complete metadata
 dry-runs for all three repositories (no mutations), YAML parsing and diff checks.
 Go vet/test and Docker build run on the isolated GitHub PR runner because Luigi
 does not have Go installed and shared Docker resources are reserved. Their final
-status must be read from the draft PR before integration; never infer it from the
+status is green on the published combined tree, with registry publication skipped
+on the PR. Recheck final draft head before integration; never infer it from the
 older individual dependency PRs. Existing default CodeQL scheduling stays intact.
+
+The plan is the first stage. A separate operator-approved operations action/CLI
+supports exact-head reviewed integration/promotion and confirmed merged-topic
+cleanup, with no force push/admin bypass and fresh owner/ref/check/review evidence.
+The pilots do not enable unattended writes or provision new write credentials.
+New common config/code still needs draft review before main activation. Remaining
+semantic issue closure, owner-specific gates and wider rollout need staged review;
+do not claim the read-only pilot fulfills that entire autonomous end state.
 
 Other owners were contacted before adoption: Security Recipes, Arrowhead, Arizona,
 Winter Hunt/game and tracker, and Wire Hold. They retain their own instructions,

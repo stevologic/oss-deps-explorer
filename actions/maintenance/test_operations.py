@@ -1,8 +1,13 @@
 import copy
+from pathlib import Path
+import subprocess
+import tempfile
 import unittest
+from unittest.mock import patch
 
 from deletion_guard import allowed
-from operations import deletion_preflight, merge_preflight, validate_intent
+import operations
+from operations import deletion_preflight, guarded_delete, merge_preflight, validate_intent
 from test_maintenance import S, policy, pull, snapshot
 
 
@@ -13,6 +18,39 @@ def intent():
 
 
 class Operations(unittest.TestCase):
+    def test_real_git_hook_deletes_only_approved_tip_and_rejects_stale_tip(self):
+        workspace = Path.cwd().resolve()
+        with tempfile.TemporaryDirectory(prefix='maintenance-local-test-', dir=workspace) as temp:
+            folder = Path(temp).resolve()
+            self.assertEqual(folder.parent, workspace)
+            bare, checkout = folder/'remote.git', folder/'checkout'
+            def git(*args):
+                p = subprocess.run(['git', *args], cwd=folder, capture_output=True, text=True)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                return p.stdout.strip()
+            git('init', '--bare', str(bare))
+            git('clone', str(bare), str(checkout))
+            (checkout/'proof.txt').write_bytes(b'isolated test fixture\n')
+            git('-C', str(checkout), 'add', 'proof.txt')
+            git('-C', str(checkout), '-c', 'user.name=MaintenanceTest', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'fixture')
+            sha = git('-C', str(checkout), 'rev-parse', 'HEAD')
+            git('-C', str(checkout), 'branch', 'codex/merged')
+            git('-C', str(checkout), 'push', 'origin', 'codex/merged')
+            real_run = operations.run
+            def local_run(*args, **kwargs):
+                if args[:4] == ('git', 'remote', 'get-url', 'origin'):
+                    return 'https://github.com/stevologic/example.git'
+                return real_run(*args, **kwargs)
+            i = intent()
+            with patch('operations.run', side_effect=local_run):
+                # The server advertises the actual tip: the stale expected value
+                # must abort in the hook before the ref transaction.
+                with self.assertRaises(ValueError): guarded_delete(policy(), i, checkout)
+                self.assertIn(sha, git('ls-remote', str(bare), 'refs/heads/codex/merged'))
+                i['branches'][0]['expected_sha'] = sha
+                guarded_delete(policy(), i, checkout)
+            self.assertEqual(git('ls-remote', str(bare), 'refs/heads/codex/merged'), '')
+
     def test_only_exact_advertised_sha_deletion_is_allowed(self):
         self.assertTrue(allowed(intent(), [f"(delete) {'0'*40} refs/heads/codex/merged {S}"]))
 
