@@ -38,7 +38,7 @@ remain default-main targeted**, independent of version cadence; no routing claim
 advisory delay is implied. Runtime and supported container proposals are weekly,
 tooling monthly, majors require quarterly review and normal validation.
 
-Local checks: common safety suite (30 tests, including a real local Git stale-tip
+Local checks: common safety suite (31 tests, including a real local Git stale-tip
 rejection and exact-tip deletion fixture), OSS UI tests (3), complete metadata
 dry-runs for all three repositories (no mutations), YAML parsing and diff checks.
 Go vet/test and Docker build run on the isolated GitHub PR runner because Luigi

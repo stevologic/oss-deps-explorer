@@ -62,6 +62,31 @@ def deletion_preflight(config, intent, snapshot):
     return intent["branches"]
 
 
+def collect_cleanup(config, intent, api):
+    """Cleanup needs refs/open heads/merged proof, not every PR's paid/CI queue."""
+    repo = api.get("")
+    if repo.get("default_branch") != config["default_branch"]:
+        raise ValueError("Actual default branch changed")
+    branches = api.pages("/branches")
+    pulls = api.pages("/pulls?state=open")
+    merged = [p for p in api.pages("/pulls?state=closed") if p.get("merged_at")]
+    snapshot = {"complete": True, "repository": config["repository"], "branches": branches,
+                "prs": pulls, "merged_prs": merged, "ancestry": {}}
+    wanted = {b["branch"]: b["expected_sha"] for b in intent["branches"]}
+    for branch in branches:
+        if branch["name"] not in wanted:
+            continue
+        sha = branch["commit"]["sha"]
+        if sha != wanted[branch["name"]]:
+            raise ValueError("Approved branch tip changed")
+        snapshot["ancestry"][sha] = {}
+        for target in (config["default_branch"], config["integration_branch"]):
+            import urllib.parse
+            comparison = api.get("/compare/" + sha + "..." + urllib.parse.quote(target, safe=""))
+            snapshot["ancestry"][sha][target] = comparison.get("behind_by") == 0
+    return snapshot
+
+
 def merge_preflight(config, intent, snapshot):
     validate_intent(config, intent)
     pull = next((p for p in snapshot["prs"] if p["number"] == intent["pr_number"]), None)
@@ -127,7 +152,7 @@ def main():
     if login != intent["approved_by"]:
         raise ValueError("Existing authenticated account is not the approved owner")
     api = GhAPI(config["repository"])
-    snapshot = collect(config, api)
+    snapshot = collect_cleanup(config, intent, api) if intent["operation"] == "delete-merged-branches" else collect(config, api)
     # Preserve all default/development/release/Pages refs, active owner reservations,
     # open PR heads, explicit holds, failed checks and unknown evidence.
     if intent["operation"] == "delete-merged-branches":
