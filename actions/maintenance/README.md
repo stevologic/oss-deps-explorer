@@ -57,6 +57,8 @@ issue/build fixes land in normal feature PRs with repository tests.
 Deletion uses an atomic normal git push with a temporary pre-push guard. The guard
 compares Git's advertised remote SHA with every approved expected SHA and rejects
 any updated/extra/missing/duplicate ref or non-deletion operation. It preserves
+existing pre-push hooks and their veto authority with the original arguments/input,
+as well as
 active/unmerged/default/development/release/Pages branches and repeats absence
 readback. There is no force-push flag. The temporary hook path is verified to stay
 inside the isolated checkout before cleanup. See [Git pre-push documentation](https://git-scm.com/docs/githooks#_pre_push).

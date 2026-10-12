@@ -110,6 +110,9 @@ def guarded_delete(config, intent, checkout):
         raise ValueError("Checkout remote does not match verified owned repository")
     for row in intent["branches"]:
         run("git", "check-ref-format", "refs/heads/" + row["branch"], cwd=checkout)
+    original_hook = Path(run("git", "rev-parse", "--git-path", "hooks/pre-push", cwd=checkout))
+    if not original_hook.is_absolute():
+        original_hook = checkout / original_hook
     # pre-push receives the advertised remote object ID. Git's ref transaction
     # rejects a further remote change after advertisement; the hook rejects a
     # change between the approval/preflight and advertisement. No force flag.
@@ -121,7 +124,14 @@ def guarded_delete(config, intent, checkout):
         (folder / "guard.py").write_bytes(guard.encode())
         (folder / "intent.json").write_bytes(json.dumps(intent).encode())
         python = shlex.quote(Path(sys.executable).as_posix())
-        hook = "#!/bin/sh\nexec " + python + " " + shlex.quote((folder / "guard.py").as_posix()) + " " + shlex.quote((folder / "intent.json").as_posix()) + "\n"
+        stdin_file = shlex.quote((folder / "push-input").as_posix())
+        original = shlex.quote(original_hook.as_posix())
+        # Existing pre-push gates receive the same arguments/input and retain
+        # veto authority; the temporary guard must never replace a security gate.
+        hook = ("#!/bin/sh\ncat > " + stdin_file + "\n"
+                + "if [ -x " + original + " ]; then " + original + " \"$@\" < " + stdin_file + " || exit $?; fi\n"
+                + "exec " + python + " " + shlex.quote((folder / "guard.py").as_posix()) + " "
+                + shlex.quote((folder / "intent.json").as_posix()) + " < " + stdin_file + "\n")
         (folder / "pre-push").write_bytes(hook.encode())
         (folder / "pre-push").chmod(0o700)
         output = run("git", "-c", "core.hooksPath=" + str(folder), "push", "--porcelain", "--atomic", "origin", "--delete", *(r["branch"] for r in intent["branches"]), cwd=checkout)

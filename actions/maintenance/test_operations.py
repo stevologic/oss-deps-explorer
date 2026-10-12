@@ -52,6 +52,12 @@ class Operations(unittest.TestCase):
                 with self.assertRaises(ValueError): guarded_delete(policy(), i, checkout)
                 self.assertIn(sha, git('ls-remote', str(bare), 'refs/heads/codex/merged'))
                 i['branches'][0]['expected_sha'] = sha
+                existing_hook = checkout/'.git/hooks/pre-push'
+                existing_hook.write_bytes(b'#!/bin/sh\nexit 1\n')
+                existing_hook.chmod(0o700)
+                with self.assertRaises(ValueError): guarded_delete(policy(), i, checkout)
+                self.assertIn(sha, git('ls-remote', str(bare), 'refs/heads/codex/merged'))
+                existing_hook.unlink()
                 guarded_delete(policy(), i, checkout)
             self.assertEqual(git('ls-remote', str(bare), 'refs/heads/codex/merged'), '')
 
